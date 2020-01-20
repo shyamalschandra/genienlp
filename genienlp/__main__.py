@@ -31,13 +31,14 @@
 import sys
 import argparse
 
-from . import arguments, train, predict, server, cache_embeddings
+from . import arguments, train, predict, server, cache_embeddings, script
 
 subcommands = {
     'train': ('Train a model', arguments.parse_argv, train.main),
     'predict': ('Evaluate a model, or compute predictions on a test dataset', predict.parse_argv, predict.main),
     'server': ('Export RPC interface to predict', server.parse_argv, server.main),
     'cache-embeddings': ('Download and cache embeddings', cache_embeddings.parse_argv, cache_embeddings.main),
+    'script': ('Compile a model to TorchScript', script.parse_argv, script.main)
 }
 
 
