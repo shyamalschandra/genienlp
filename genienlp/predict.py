@@ -114,7 +114,7 @@ def run(args, numericalizer, val_sets, model, device):
 
             predictions = []
             answers = []
-            with open(prediction_file_name, 'w' + ('' if args.overwrite else 'x')) as prediction_file:
+            with open(prediction_file_name, 'w') as prediction_file:
                 for batch_idx, batch in tqdm(enumerate(it), desc="Batches"):
                     _, batch_prediction = model(batch, iteration=1)
 
@@ -175,6 +175,11 @@ def parse_argv(parser):
                         help='directory where cached models should be loaded from')
     parser.add_argument('--subsample', default=20000000, type=int,
                         help='subsample the eval/test datasets (experimental)')
+
+    # If not None, these values will override the values saved in the trained model's config file
+    parser.add_argument('--val_batch_size', nargs='+', default=None, type=int,
+                        help='Batch size for validation corresponding to tasks in val tasks')
+    parser.add_argument('--num_beams', type=int, default=None, help='number of beams to use for beam search')
 
 
 def main(args):

@@ -273,14 +273,20 @@ def load_config_json(args):
         config = json.load(config_file)
         retrieve = ['model', 'seq2seq_encoder', 'seq2seq_decoder', 'transformer_layers', 'rnn_layers', 'rnn_zero_state',
                     'transformer_hidden', 'dimension', 'rnn_dimension', 'load', 'max_val_context_length',
-                    'val_batch_size', 'transformer_heads', 'max_output_length', 'max_generative_vocab', 'lower',
+                    'transformer_heads', 'max_output_length', 'max_generative_vocab', 'lower',
                     'encoder_embeddings', 'decoder_embeddings', 'trainable_decoder_embeddings',
-                    'train_encoder_embeddings', 'locale', 'use_pretrained_bert', 'num_beams']
+                    'train_encoder_embeddings', 'locale', 'use_pretrained_bert']
+
+        # train and predict scripts have these arguments in common. We use the values from train only if they are not provided in predict
+        overwrite = ['val_batch_size', 'num_beams']
+        for o in overwrite:
+            if args.val_batch_size is None:
+                retrieve.append(o)
 
         for r in retrieve:
             if r in config:
                 setattr(args, r, config[r])
-            # These are for backward compatibility with models that were trained before we added these arguments
+            # backward compatibility with models that were trained before we added these arguments
             elif r == 'locale':
                 setattr(args, r, 'en')
             elif r == 'trainable_decoder_embedding':
