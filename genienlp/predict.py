@@ -129,7 +129,7 @@ def run(args, numericalizer, val_sets, model, device):
                         prediction_file.write(batch.example_id[i] + '\t' + example_prediction + '\n')
 
             if len(answers) > 0:
-                metrics, answers = compute_metrics(predictions, answers, task.metrics, args=args)
+                metrics, _ = compute_metrics(predictions, answers, task.metrics, args=args)
                 with open(results_file_name, 'w' + ('' if args.overwrite else '+')) as results_file:
                     results_file.write(json.dumps(metrics) + '\n')
 

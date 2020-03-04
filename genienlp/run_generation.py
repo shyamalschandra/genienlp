@@ -306,10 +306,11 @@ def parse_argv(parser):
 
 def main(args):
     max_hyperparameter_len = max(len(args.temperature), len(args.top_k), len(args.top_p), len(args.repetition_penalty))
-    if (len(args.temperature) != max_hyperparameter_len and len(args.temperature) != 1) or \
-        (len(args.top_k) != max_hyperparameter_len and len(args.top_k) != 1) or \
-        (len(args.top_p) != max_hyperparameter_len and len(args.top_p) != 1) or \
-        (len(args.repetition_penalty) != max_hyperparameter_len and len(args.repetition_penalty) != 1):
+    valid_len = [1, max_hyperparameter_len]
+    if (len(args.temperature) not in valid_len) or \
+        (len(args.top_k) not in valid_len) or \
+        (len(args.top_p) not in valid_len) or \
+        (len(args.repetition_penalty) not in valid_len):
         logger.error('Hyperparameters should either have the same number of values as others or have exactly one value.')
     
     # If only one value is provided, use the same value for all samples
@@ -319,6 +320,7 @@ def main(args):
     args.repetition_penalty = args.repetition_penalty * (max_hyperparameter_len // len(args.repetition_penalty))
 
     logger.info('Will output %d sequences for each input.', max_hyperparameter_len*args.num_samples)
+    logger.info('Effective batch size for each GPU is %d', args.batch_size*args.num_samples)
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
@@ -327,7 +329,7 @@ def main(args):
     args.model_type = args.model_type.lower()
 
     if args.n_gpu > 1:
-        # Independent multi-GPU evaluation
+        # Independent multi-GPU generation
         all_processes = []
         all_input_files = split_file_on_disk(args.input_file, args.n_gpu)
         for gpu_idx in range(args.n_gpu):
