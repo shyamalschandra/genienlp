@@ -98,21 +98,28 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
     """
     max_length = len(context[0]) # context is sorted by length from longest to shortest
     min_length = len(context[-1])
-    for a in context:
-        a.extend([pad_token_id] * (max_length-len(a)))
+
+    # should not change the elements of context since it will change them outside this function as well.
+    padded_context = []
+    for i in range(len(context)):
+        padded_context.append(context[i] + ([pad_token_id] * (max_length-len(context[i]))))
     
-    context = torch.tensor(context, dtype=torch.long, device=device)
+    context = torch.tensor(padded_context, dtype=torch.long, device=device)
     context = context.repeat(num_samples, 1)
     next_index = min_length
     generated = context[:, :next_index]
     should_finish = None
     length = max_length + length
     segment_ids = []
-    for p in position_ids:
-        segment_ids.append([segment_token_ids[0]]*len(p)+[segment_token_ids[1]]*(length+max_length-len(p)))
-        p.extend(range(length+max_length-len(p)))
 
-    position_ids = torch.tensor(position_ids, dtype=torch.long, device=device)
+    # should not change the elements of position_ids since it will change them outside this function as well.
+    completed_position_ids = []
+    for i in range(len(position_ids)):
+        p = position_ids[i]
+        segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+max_length-len(p)))
+        completed_position_ids.append(p + list(range(length + max_length - len(p))))
+
+    position_ids = torch.tensor(completed_position_ids, dtype=torch.long, device=device)
     position_ids = position_ids.repeat(num_samples, 1)
     segment_ids = torch.tensor(segment_ids, dtype=torch.long, device=device)
     segment_ids = segment_ids.repeat(num_samples, 1)
@@ -244,7 +251,7 @@ def input_heuristics(s: str):
     if s.startswith('which') or s.startswith('what') or s.startswith('where') or s.startswith('how') or s.startswith('who') or s.startswith('when'):
         if s.endswith('.'):
             s = s[:-1]
-        s += '?'
+            s += '?'
 
     # replace special tokens with natural-looking exmaples
     for special_token, natural_form in special_token_mapping.items():
@@ -290,8 +297,8 @@ def parse_argv(parser):
                         help="temperature of 0 implies greedy sampling")
     parser.add_argument("--repetition_penalty", type=float, nargs='+', default=[1.0],
                         help="primarily useful for CTRL model; in that case, use 1.2")
-    parser.add_argument("--top_k", type=int, nargs='+', default=[0])
-    parser.add_argument("--top_p", type=float, nargs='+', default=[0.9])
+    parser.add_argument("--top_k", type=int, nargs='+', default=[0], help='0 disables top-k filtering')
+    parser.add_argument("--top_p", type=float, nargs='+', default=[0.9], help='1.0 disables top-p filtering')
 
     parser.add_argument("--no_cuda", action='store_true',
                         help="Avoid using CUDA when available")
@@ -319,7 +326,7 @@ def main(args):
     args.top_p = args.top_p * (max_hyperparameter_len // len(args.top_p))
     args.repetition_penalty = args.repetition_penalty * (max_hyperparameter_len // len(args.repetition_penalty))
 
-    logger.info('Will output %d sequences for each input.', max_hyperparameter_len*args.num_samples)
+    logger.info('Will output %d sequences for each input.', args.batch_size*max_hyperparameter_len*args.num_samples)
     logger.info('Effective batch size for each GPU is %d', args.batch_size*args.num_samples)
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -473,6 +480,7 @@ def run_generation(args):
                 # print('generated tokens: ', o)
                 # print('original text: ', tokenizer.decode(batch_context_tokens[i % (batch_slice[1]-batch_slice[0])], clean_up_tokenization_spaces=True, skip_special_tokens=False))
                 # print('text = ', text)
+                # print('-'*10)
                 if args.stop_tokens is not None:
                     min_index = len(text)
                     for stop_token in args.stop_tokens:
