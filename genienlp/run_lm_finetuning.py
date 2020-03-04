@@ -270,7 +270,7 @@ def train(args, train_dataset, model, tokenizer):
         # set global_step to gobal_step of last saved checkpoint from model path
         global_step = int(args.model_name_or_path.split('-')[-1].split('/')[0])
         epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
-        steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
+        steps_trained_in_current_epoch = (global_step % (len(train_dataloader) // args.gradient_accumulation_steps)) * args.gradient_accumulation_steps
 
         logger.info("  Continuing training from checkpoint, will skip to saved global_step")
         logger.info("  Continuing training from epoch %d", epochs_trained)

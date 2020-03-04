@@ -82,7 +82,7 @@ the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famo
 with people, even a bishop, begging for his blessing. <eod> </s> <eos>"""
 
 
-def sample_sequence(model, length, context, position_ids, num_samples=1, temperature=1, top_k=0, top_p=0.0, repetition_penalty=1.0,
+def sample_sequence(model, length, context, position_ids, num_samples=1, temperature=[1], top_k=[0], top_p=[0.0], repetition_penalty=[1.0],
                     is_xlnet=False, is_xlm_mlm=False, xlm_mask_token=None, xlm_lang=None, device='cpu',
                     stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None):
     """
@@ -284,12 +284,15 @@ def parse_argv(parser):
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
     parser.add_argument("--length", type=int, default=10, help='The generated sentences will have a maximum length of len(input) + arg.length')
     parser.add_argument("--num_samples", type=int, default=1)
-    parser.add_argument("--temperature", type=float, default=1.0,
+
+    # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
+    parser.add_argument("--temperature", type=float, nargs='+', default=[1.0],
                         help="temperature of 0 implies greedy sampling")
-    parser.add_argument("--repetition_penalty", type=float, default=1.0,
+    parser.add_argument("--repetition_penalty", type=float, nargs='+', default=[1.0],
                         help="primarily useful for CTRL model; in that case, use 1.2")
-    parser.add_argument("--top_k", type=int, default=0)
-    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--top_k", type=int, nargs='+', default=[0])
+    parser.add_argument("--top_p", type=float, nargs='+', default=[0.9])
+
     parser.add_argument("--no_cuda", action='store_true',
                         help="Avoid using CUDA when available")
     parser.add_argument('--seed', type=int, default=42,
@@ -302,6 +305,21 @@ def parse_argv(parser):
                         help="Batch size for text generation for each GPU.")
 
 def main(args):
+    max_hyperparameter_len = max(len(args.temperature), len(args.top_k), len(args.top_p), len(args.repetition_penalty))
+    if (len(args.temperature) != max_hyperparameter_len and len(args.temperature) != 1) or \
+        (len(args.top_k) != max_hyperparameter_len and len(args.top_k) != 1) or \
+        (len(args.top_p) != max_hyperparameter_len and len(args.top_p) != 1) or \
+        (len(args.repetition_penalty) != max_hyperparameter_len and len(args.repetition_penalty) != 1):
+        logger.error('Hyperparameters should either have the same number of values as others or have exactly one value.')
+    
+    # If only one value is provided, use the same value for all samples
+    args.temperature = args.temperature * (max_hyperparameter_len // len(args.temperature))
+    args.top_k = args.top_k * (max_hyperparameter_len // len(args.top_k))
+    args.top_p = args.top_p * (max_hyperparameter_len // len(args.top_p))
+    args.repetition_penalty = args.repetition_penalty * (max_hyperparameter_len // len(args.repetition_penalty))
+
+    logger.info('Will output %d sequences for each input.', max_hyperparameter_len*args.num_samples)
+
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
 
@@ -421,48 +439,50 @@ def run_generation(args):
         batch_position_ids = all_position_ids[batch_slice[0]: batch_slice[1]]
         batch_reverse_maps = reverse_maps[batch_slice[0]: batch_slice[1]]
 
-        out = sample_sequence(
-            model=model,
-            context=batch_context_tokens,
-            position_ids=batch_position_ids,
-            num_samples=args.num_samples,
-            length=args.length,
-            temperature=args.temperature,
-            top_k=args.top_k,
-            top_p=args.top_p,
-            repetition_penalty=args.repetition_penalty,
-            is_xlnet=bool(args.model_type == "xlnet"),
-            is_xlm_mlm=is_xlm_mlm,
-            xlm_mask_token=xlm_mask_token,
-            xlm_lang=xlm_lang,
-            device=args.device,
-            stop_token_ids=[tokenizer.convert_tokens_to_ids(stop_token) for stop_token in args.stop_tokens],
-            pad_token_id=pad_token_id,
-            supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
-            prompt_token_id=prompt_token_id,
-            segment_token_ids=[tokenizer.convert_tokens_to_ids(args.prompt_token), tokenizer.convert_tokens_to_ids(args.stop_tokens[0])]
-        )
-        out = out[:, :].tolist()
         batch_outputs = [[] for _ in range(batch_slice[1]-batch_slice[0])]
-        for i, o in enumerate(out):
-            o = o[batch_context_lengths[i % (batch_slice[1]-batch_slice[0])]:]
-            text = tokenizer.decode(o, clean_up_tokenization_spaces=True, skip_special_tokens=False)
-            # print('original tokens: ', batch_context_tokens[i % (batch_slice[1]-batch_slice[0])])
-            # print('generated tokens: ', o)
-            # print('original text: ', tokenizer.decode(batch_context_tokens[i % (batch_slice[1]-batch_slice[0])], clean_up_tokenization_spaces=True, skip_special_tokens=False))
-            # print('text = ', text)
-            if args.stop_tokens is not None:
-                min_index = len(text)
-                for stop_token in args.stop_tokens:
-                    index = text.find(stop_token)
-                    if index >= 0:
-                        min_index = min(index, min_index)
-                if min_index < len(text) and text[min_index] == '?':
-                    min_index += 1
-                text = text[:min_index]
+        for hyperparameter_idx in range(len(args.temperature)):
+            out = sample_sequence(
+                model=model,
+                context=batch_context_tokens,
+                position_ids=batch_position_ids,
+                num_samples=args.num_samples,
+                length=args.length,
+                temperature=args.temperature[hyperparameter_idx],
+                top_k=args.top_k[hyperparameter_idx],
+                top_p=args.top_p[hyperparameter_idx],
+                repetition_penalty=args.repetition_penalty[hyperparameter_idx],
+                is_xlnet=bool(args.model_type == "xlnet"),
+                is_xlm_mlm=is_xlm_mlm,
+                xlm_mask_token=xlm_mask_token,
+                xlm_lang=xlm_lang,
+                device=args.device,
+                stop_token_ids=[tokenizer.convert_tokens_to_ids(stop_token) for stop_token in args.stop_tokens],
+                pad_token_id=pad_token_id,
+                supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
+                prompt_token_id=prompt_token_id,
+                segment_token_ids=[tokenizer.convert_tokens_to_ids(args.prompt_token), tokenizer.convert_tokens_to_ids(args.stop_tokens[0])]
+            )
+            
+            out = out[:, :].tolist()
+            for i, o in enumerate(out):
+                o = o[batch_context_lengths[i % (batch_slice[1]-batch_slice[0])]:]
+                text = tokenizer.decode(o, clean_up_tokenization_spaces=True, skip_special_tokens=False)
+                # print('original tokens: ', batch_context_tokens[i % (batch_slice[1]-batch_slice[0])])
+                # print('generated tokens: ', o)
+                # print('original text: ', tokenizer.decode(batch_context_tokens[i % (batch_slice[1]-batch_slice[0])], clean_up_tokenization_spaces=True, skip_special_tokens=False))
+                # print('text = ', text)
+                if args.stop_tokens is not None:
+                    min_index = len(text)
+                    for stop_token in args.stop_tokens:
+                        index = text.find(stop_token)
+                        if index >= 0:
+                            min_index = min(index, min_index)
+                    if min_index < len(text) and text[min_index] == '?':
+                        min_index += 1
+                    text = text[:min_index]
 
-            text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
-            batch_outputs[i % (batch_slice[1]-batch_slice[0])].append(text)
+                text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
+                batch_outputs[i % (batch_slice[1]-batch_slice[0])].append(text)
 
         all_outputs.extend(batch_outputs)
 
