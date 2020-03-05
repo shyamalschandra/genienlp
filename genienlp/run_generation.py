@@ -238,7 +238,7 @@ special_token_mapping = {
 
 def input_heuristics(s: str):
     """
-    Changes the input string so that it is closer to what the pre-traied language models have seen during their training.
+    Changes the input string so that it is closer to what the pre-trained language models have seen during their training.
     Outputs:
         s: the new string
         reverse_map: a list of special tokens. Can be used to recover the original special_tokens in the string
@@ -257,14 +257,14 @@ def input_heuristics(s: str):
     for special_token, natural_form in special_token_mapping.items():
         new_s = s.replace(special_token, natural_form['forward'])
         if new_s != s:
-            print(new_s)
+            # print(new_s)
             reverse_map.append(special_token)
         s = new_s
     return s, reverse_map
 
 def output_heuristics(s: str, reverse_map: list):
     s = s.replace('<pad>', '')
-    s = re.sub('\s\s+', ' ', s) # remove multiple white spaces
+    s = re.sub('\s\s+', ' ', s) # remove duplicate white spaces
     s = s.strip()
 
     for special_token in reverse_map:
@@ -354,11 +354,10 @@ def main(args):
         for p in all_processes:
             p.join()
 
-        combine_files_on_disk(args.output_file, args.n_gpu)
+        combine_files_on_disk(args.output_file, args.n_gpu, delete=True)
 
     else:
         run_generation(args)
-
 
 
 def run_generation(args):
@@ -368,7 +367,6 @@ def run_generation(args):
     model.to(args.device)
 
     model.eval()
-    print(args.stop_tokens)
 
     if args.length < 0 and model.config.max_position_embeddings > 0:
         args.length = model.config.max_position_embeddings

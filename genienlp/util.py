@@ -93,13 +93,15 @@ def split_file_on_disk(file_path, num_splits):
 
     return all_output_paths
 
-def combine_files_on_disk(file_path_prefix, num_files):
+def combine_files_on_disk(file_path_prefix, num_files, delete=False):
     with open(file_path_prefix, 'w') as combined_file:
         for i in range(num_files):
             file_path = get_file_part_path(file_path_prefix, i)
             with open(file_path, 'r') as file:
                 for line in file:
                     combined_file.write(line)
+            if delete:
+                os.remove(file_path)
 
 def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float('Inf'), min_tokens_to_keep=1):
     """ Filter a distribution of logits using top-k and/or nucleus (top-p) filtering
