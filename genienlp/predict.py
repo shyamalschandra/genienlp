@@ -129,7 +129,10 @@ def run(args, numericalizer, val_sets, model, device):
                         prediction_file.write(batch.example_id[i] + '\t' + example_prediction + '\n')
 
             if len(answers) > 0:
-                metrics, _ = compute_metrics(predictions, answers, task.metrics, args=args)
+                metrics_to_compute = task.metrics
+                if args.main_metric_only:
+                    metrics_to_compute = [metrics_to_compute[0]]
+                metrics, _ = compute_metrics(predictions, answers, metrics_to_compute, args=args)
                 with open(results_file_name, 'w' + ('' if args.overwrite else '+')) as results_file:
                     results_file.write(json.dumps(metrics) + '\n')
 
@@ -175,6 +178,7 @@ def parse_argv(parser):
                         help='directory where cached models should be loaded from')
     parser.add_argument('--subsample', default=20000000, type=int,
                         help='subsample the eval/test datasets (experimental)')
+    parser.add_argument('--main_metric_only', action='store_true', help='If True, we only calculate the deca score metric for each task.')
 
     # If not None, these values will override the values saved in the trained model's config file
     parser.add_argument('--val_batch_size', nargs='+', default=None, type=int,
