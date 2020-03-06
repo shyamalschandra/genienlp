@@ -30,6 +30,7 @@ import pickle
 import re
 import shutil
 import torch
+import math
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.distributed import DistributedSampler
@@ -124,6 +125,14 @@ class TextDataset(Dataset):
     def __getitem__(self, item):
         return torch.tensor(self.examples[item]), torch.tensor(self.labels[item]), torch.tensor(self.position_ids[item]), torch.tensor(self.segment_ids[item])
 
+
+def get_transformer_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, dimension):
+
+    def lr_lambda(current_step):
+        current_step += 1
+        return 1. / math.sqrt(dimension) * min(1 / math.sqrt(current_step), current_step / (num_warmup_steps * math.sqrt(num_warmup_steps)))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
     dataset = TextDataset(tokenizer, args, file_path=args.eval_data_file if evaluate else args.train_data_file, block_size=args.block_size, evaluate=evaluate)
@@ -236,7 +245,19 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
+
+    if args.scheduler == 'linear':
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
+    elif args.scheduler == 'transformer':
+        if args.model_type == 'bert':
+            dimension = model.config.hidden_size
+        elif args.model_type == 'gpt2':
+            dimension = model.config.n_embd
+        else:
+            logger.error('Cannot detect hidden size dimensions in this model type. Config: %s', model.config)
+        scheduler = get_transformer_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total, dimension=dimension)
+    else:
+        logger.error('Unknown scheduler type.')
 
     # Check if saved optimizer or scheduler states exist
     if os.path.isfile(os.path.join(args.model_name_or_path, 'optimizer.pt')) and os.path.isfile(os.path.join(args.model_name_or_path, 'scheduler.pt')):
@@ -374,7 +395,7 @@ def train(args, train_dataset, model, tokenizer):
                     tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
                     logging_loss = tr_loss
 
-                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0 and args.save_total_limit > 0:
                     checkpoint_prefix = 'checkpoint'
                     # Save model checkpoint
                     output_dir = os.path.join(args.output_dir, '{}-{}'.format(checkpoint_prefix, global_step))
@@ -553,6 +574,8 @@ def parse_argv(parser):
                         help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
     parser.add_argument("--warmup_steps", default=0, type=int,
                         help="Linear warmup over warmup_steps.")
+    parser.add_argument("--scheduler", default='linear', type=str, choices=['linear', 'transformer'],
+                        help="The type of learning rate scheduler to use.")
 
     parser.add_argument('--logging_steps', type=int, default=50,
                         help="Log every X updates steps.")
