@@ -467,7 +467,7 @@ def run_generation(args):
                 pad_token_id=pad_token_id,
                 supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
                 prompt_token_id=prompt_token_id,
-                segment_token_ids=[tokenizer.convert_tokens_to_ids(args.prompt_token), tokenizer.convert_tokens_to_ids(args.stop_tokens[0])]
+                segment_token_ids=[0, 1]
             )
             
             out = out[:, :].tolist()

@@ -77,8 +77,8 @@ class TextDataset(Dataset):
             logger.info("Creating features from dataset file at %s", file_path)
 
             prompt_token_id = tokenizer.convert_tokens_to_ids(prompt_token)
-            segment1_id = tokenizer.convert_tokens_to_ids(args.start_special_token)
-            segment2_id = tokenizer.convert_tokens_to_ids(args.end_special_token)
+            segment1_id = 0
+            segment2_id = 1
             # print('prompt_token_id = ', prompt_token_id)
             self.examples = []
             self.labels = []
@@ -90,11 +90,13 @@ class TextDataset(Dataset):
                     tokens = tokenizer.tokenize(line)
                     tokenized_text = tokenizer.convert_tokens_to_ids(tokens)
                     tokenized_text = tokenized_text[0:block_size] # truncate longer sequences
-                    # print(tokenized_text)
+                    # print('line: ', line)
+                    # print('tokens = ', tokens)
                     example = tokenizer.build_inputs_with_special_tokens(tokenized_text)
+                    # print('example = ', example)
                     max_input_length = max(max_input_length, len(example))
                     try:
-                        prompt_token_location = tokenized_text.index(prompt_token_id)
+                        prompt_token_location = example.index(prompt_token_id)
                     except ValueError:
                         logger.warning('Prompt token not found after truncating the input. Dropping the example.')
                         continue
@@ -103,7 +105,7 @@ class TextDataset(Dataset):
                     if args.train_all_tokens and not evaluate:
                         self.labels.append(example)
                     else: # During evaluation, we only care about the output sequence so we mask the input
-                        self.labels.append([-1]*(prompt_token_location+1)+example[prompt_token_location+1:])
+                        self.labels.append([-100]*(prompt_token_location+1)+example[prompt_token_location+1:])
                     self.position_ids.append([pos for pos in range(prompt_token_location+1)]+[pos for pos in range(len(example)-prompt_token_location-1)])
                     self.segment_ids.append([segment1_id]*(prompt_token_location+1)+[segment2_id]*(len(example)-prompt_token_location-1))
 
@@ -153,15 +155,18 @@ def _rotate_checkpoints(args, checkpoint_prefix, use_mtime=False):
         shutil.rmtree(checkpoint)
 
 
-def mask_tokens(inputs, tokenizer, args):
-    """ Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original. """
-    labels = inputs.clone()
+def mask_tokens(inputs, labels, tokenizer, args):
+    """
+    Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
+    """
     # We sample a few tokens in each sequence for masked-LM training (with probability args.mlm_probability defaults to 0.15 in Bert/RoBERTa)
     probability_matrix = torch.full(labels.shape, args.mlm_probability)
     special_tokens_mask = [tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()]
+    # print('labels.tolist() = ', labels.tolist())
+    # print('special_tokens_mask = ', special_tokens_mask)
     probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
     masked_indices = torch.bernoulli(probability_matrix).bool()
-    labels[~masked_indices] = -1  # We only compute loss on masked tokens
+    labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
     # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
     indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
@@ -178,7 +183,7 @@ def mask_tokens(inputs, tokenizer, args):
 def pad_collate(batch, pad_token_id):
     (inputs, labels, position_ids, segment_ids) = zip(*batch)
     inputs_pad = pad_sequence(inputs, batch_first=True, padding_value=pad_token_id)
-    labels_pad = pad_sequence(labels, batch_first=True, padding_value=-1)
+    labels_pad = pad_sequence(labels, batch_first=True, padding_value=-100)
     position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) # will be ignored in the loss function, so its value does not matter
     segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0) # will be ignored in the loss function, so its value does not matter
 
@@ -299,13 +304,22 @@ def train(args, train_dataset, model, tokenizer):
                 steps_trained_in_current_epoch -= 1
                 continue
 
-            inputs, labels, position_ids, segment_ids = mask_tokens(batch, tokenizer, args) if args.mlm else batch # batch is a tuple (input, labels, position_ids, segment_ids)
+            inputs, labels, position_ids, segment_ids = batch # batch is a tuple (input, labels, position_ids, segment_ids)
+            if args.mlm:
+                inputs, labels = mask_tokens(inputs, labels, tokenizer, args)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
             position_ids = position_ids.to(args.device)
             segment_ids = segment_ids.to(args.device)
             model.train()
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
+            # print('inputs', inputs)
+            # print('labels', labels)
+            # print('position_ids', position_ids.shape)
+            # print('segment_ids', segment_ids.shape)
+            if args.mlm:
+                outputs = model(inputs, masked_lm_labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
+            else:
+                outputs = model(inputs, labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if args.n_gpu > 1:
@@ -416,14 +430,19 @@ def evaluate(args, model, tokenizer, prefix=""):
     model.eval()
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        inputs, labels, position_ids, segment_ids = mask_tokens(batch, tokenizer, args) if args.mlm else batch
+        inputs, labels, position_ids, segment_ids = batch
+        if args.mlm:
+            inputs, labels = mask_tokens(inputs, labels, tokenizer, args)
         inputs = inputs.to(args.device)
         labels = labels.to(args.device)
         position_ids = position_ids.to(args.device)
         segment_ids = segment_ids.to(args.device)
 
         with torch.no_grad():
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
+            if args.mlm:
+                outputs = model(inputs, masked_lm_labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
+            else:
+                outputs = model(inputs, labels=labels, position_ids=position_ids, token_type_ids=segment_ids)
             lm_loss = outputs[0]
             eval_loss += lm_loss.mean().item()
         nb_eval_steps += 1
@@ -444,10 +463,11 @@ def evaluate(args, model, tokenizer, prefix=""):
 
     return result
 
-def add_special_tokens(model, tokenizer, additional_special_tokens):
+def add_special_tokens(model, tokenizer, additional_special_tokens, pad_token=None):
     """ Add special tokens to the tokenizer and the model if they have not already been added. """
-    ATTR_TO_SPECIAL_TOKEN = {'pad_token': '<pad>',
-                         'additional_special_tokens': additional_special_tokens}
+    ATTR_TO_SPECIAL_TOKEN = {'additional_special_tokens': additional_special_tokens}
+    if pad_token is not None:
+        ATTR_TO_SPECIAL_TOKEN['pad_token'] = pad_token
     orig_num_tokens = len(tokenizer)
     num_added_tokens = tokenizer.add_special_tokens(ATTR_TO_SPECIAL_TOKEN) # doesn't add if they are already there
     if num_added_tokens > 0:
@@ -468,6 +488,8 @@ def parse_argv(parser):
                         help='The special token for the start of paraphrases.')
     parser.add_argument('--end_special_token', type=str, default='</paraphrase>',
                         help='The special token for the end of paraphrases.')
+    parser.add_argument('--pad_token', type=str, default='<pad>',
+                        help='The special token for padding..')
     parser.add_argument('--add_inbetween_as_special_tokens', action='store_true',
                         help='The space-separated tokens between --start_special_token and --end_special_token will be added as special tokens. Useful for ThingTalk code.')
     parser.add_argument('--train_all_tokens', action='store_true',
@@ -601,7 +623,7 @@ def main(args):
                                         from_tf=bool('.ckpt' in args.model_name_or_path),
                                         config=config,
                                         cache_dir=args.cache_dir if args.cache_dir else None)
-    add_special_tokens(model, tokenizer, additional_special_tokens=[args.start_special_token, args.end_special_token])
+    add_special_tokens(model, tokenizer, additional_special_tokens=[args.start_special_token, args.end_special_token], pad_token=args.pad_token)
     if args.add_inbetween_as_special_tokens:
         new_tokens = get_inbetween_tokens(args.train_data_file, start_token=args.start_special_token, end_token=args.end_special_token)
         logger.info('Detected %d new tokens', len(new_tokens))
