@@ -106,8 +106,12 @@ class TextDataset(Dataset):
                         self.labels.append(example)
                     else: # During evaluation, we only care about the output sequence so we mask the input
                         self.labels.append([-100]*(prompt_token_location+1)+example[prompt_token_location+1:])
-                    self.position_ids.append([pos for pos in range(prompt_token_location+1)]+[pos for pos in range(len(example)-prompt_token_location-1)])
-                    self.segment_ids.append([segment1_id]*(prompt_token_location+1)+[segment2_id]*(len(example)-prompt_token_location-1))
+                    
+                    position_ids2 = range(len(example)-prompt_token_location-1)
+                    if args.reverse_position_ids:
+                        position_ids2 = reversed(position_ids2)
+                    self.position_ids.append(list(range(prompt_token_location+1)) + list(position_ids2))
+                    self.segment_ids.append([segment1_id]*(prompt_token_location+1) + [segment2_id]*(len(example)-prompt_token_location-1))
 
             logger.info('Maximum input length: %d', max_input_length)
             logger.info("Saving features into cached file %s", cached_features_file)
@@ -483,7 +487,6 @@ def parse_argv(parser):
     parser.add_argument("--tensorboard_dir", default=None, type=str, required=True,
                         help="The output directory where the tensorboard files will be written.")
                         
-
     parser.add_argument('--start_special_token', type=str, default='<paraphrase>',
                         help='The special token for the start of paraphrases.')
     parser.add_argument('--end_special_token', type=str, default='</paraphrase>',
@@ -494,6 +497,9 @@ def parse_argv(parser):
                         help='The space-separated tokens between --start_special_token and --end_special_token will be added as special tokens. Useful for ThingTalk code.')
     parser.add_argument('--train_all_tokens', action='store_true',
                         help='If True, the model will be trained on input and output sequences, as opposed to only tokens of the output sequence')
+    parser.add_argument("--reverse_position_ids", action='store_true',
+                        help='If we assume we know the length of the output sequence beforehand, we can do a better job at generation.')
+
     ## Other parameters
     parser.add_argument("--eval_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
