@@ -130,8 +130,8 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
     segment_ids = torch.tensor(segment_ids, dtype=torch.long, device=device)
     segment_ids = segment_ids.repeat(num_samples, 1)
 
-    print('context = ', context)
-    print('position_ids = ', position_ids)
+    # print('context = ', context)
+    # print('position_ids = ', position_ids)
     # print('segment_ids = ', segment_ids)
 
     past = None
@@ -299,7 +299,7 @@ def parse_argv(parser):
     parser.add_argument("--num_samples", type=int, default=1)
 
     # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
-    parser.add_argument("--start_reverse_position_ids", type=int, nargs='+', default=None,
+    parser.add_argument("--start_reverse_position_ids", type=int, nargs='+', default=[None],
                         help='If provided, position ids will be the number of tokens left in generation and will start from len(input) + args.start_reverse_position_ids')
     parser.add_argument("--temperature", type=float, nargs='+', default=[1.0],
                         help="temperature of 0 implies greedy sampling")
