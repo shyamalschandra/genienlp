@@ -37,7 +37,7 @@ except RuntimeError:
 import torch
 import torch.nn.functional as F
 
-from transformers import GPT2Config, OpenAIGPTConfig, XLNetConfig, TransfoXLConfig, XLMConfig, CTRLConfig
+from transformers import GPT2Config, OpenAIGPTConfig, XLNetConfig, TransfoXLConfig, XLMConfig, CTRLConfig, BertConfig
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from transformers import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer
@@ -45,6 +45,7 @@ from transformers import XLNetLMHeadModel, XLNetTokenizer
 from transformers import TransfoXLLMHeadModel, TransfoXLTokenizer
 from transformers import CTRLLMHeadModel, CTRLTokenizer
 from transformers import XLMWithLMHeadModel, XLMTokenizer
+from transformers import BertForMaskedLM, BertTokenizer
 
 from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, top_k_top_p_filtering
 
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 MAX_LENGTH = int(10000)  # Hardcoded max length to avoid infinite loop
 
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (GPT2Config, OpenAIGPTConfig, XLNetConfig, TransfoXLConfig, XLMConfig, CTRLConfig)), ())
+ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (GPT2Config, OpenAIGPTConfig, XLNetConfig, TransfoXLConfig, XLMConfig, CTRLConfig, BertConfig)), ())
 
 MODEL_CLASSES = {
     'gpt2': (GPT2LMHeadModel, GPT2Tokenizer),
@@ -65,6 +66,7 @@ MODEL_CLASSES = {
     'xlnet': (XLNetLMHeadModel, XLNetTokenizer),
     'transfo-xl': (TransfoXLLMHeadModel, TransfoXLTokenizer),
     'xlm': (XLMWithLMHeadModel, XLMTokenizer),
+    'bert': (BertForMaskedLM, BertTokenizer),
 }
 
 # Padding text to help Transformer-XL and XLNet with short prompts as proposed by Aman Rusia
@@ -84,7 +86,8 @@ with people, even a bishop, begging for his blessing. <eod> </s> <eos>"""
 
 def sample_sequence(model, length, context, position_ids, num_samples=1, temperature=[1], top_k=[0], top_p=[0.0], repetition_penalty=[1.0],
                     is_xlnet=False, is_xlm_mlm=False, xlm_mask_token=None, xlm_lang=None, device='cpu',
-                    stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None):
+                    stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None,
+                    start_reverse_position_ids=None):
     """
     Generates sequence of tokens for the batch of input contexts.
     Inputs:
@@ -117,15 +120,18 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
     for i in range(len(position_ids)):
         p = position_ids[i]
         segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+max_length-len(p)))
-        completed_position_ids.append(p + list(range(length + max_length - len(p))))
+        if start_reverse_position_ids is None:
+            completed_position_ids.append(p + list(range(length + max_length - len(p))))
+        else:
+            completed_position_ids.append(p + list(reversed(range(start_reverse_position_ids+len(p)))) + [0]*(length + max_length-start_reverse_position_ids-2*len(p)))
 
     position_ids = torch.tensor(completed_position_ids, dtype=torch.long, device=device)
     position_ids = position_ids.repeat(num_samples, 1)
     segment_ids = torch.tensor(segment_ids, dtype=torch.long, device=device)
     segment_ids = segment_ids.repeat(num_samples, 1)
 
-    # print('context = ', context)
-    # print('position_ids = ', position_ids)
+    print('context = ', context)
+    print('position_ids = ', position_ids)
     # print('segment_ids = ', segment_ids)
 
     past = None
@@ -293,6 +299,8 @@ def parse_argv(parser):
     parser.add_argument("--num_samples", type=int, default=1)
 
     # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
+    parser.add_argument("--start_reverse_position_ids", type=int, nargs='+', default=None,
+                        help='If provided, position ids will be the number of tokens left in generation and will start from len(input) + args.start_reverse_position_ids')
     parser.add_argument("--temperature", type=float, nargs='+', default=[1.0],
                         help="temperature of 0 implies greedy sampling")
     parser.add_argument("--repetition_penalty", type=float, nargs='+', default=[1.0],
@@ -312,19 +320,14 @@ def parse_argv(parser):
                         help="Batch size for text generation for each GPU.")
 
 def main(args):
-    max_hyperparameter_len = max(len(args.temperature), len(args.top_k), len(args.top_p), len(args.repetition_penalty))
+    hyperparameters = ['temperature', 'top_k', 'top_p', 'repetition_penalty', 'start_reverse_position_ids']
+    max_hyperparameter_len = max([len(getattr(args, h)) for h in hyperparameters])
     valid_len = [1, max_hyperparameter_len]
-    if (len(args.temperature) not in valid_len) or \
-        (len(args.top_k) not in valid_len) or \
-        (len(args.top_p) not in valid_len) or \
-        (len(args.repetition_penalty) not in valid_len):
-        logger.error('Hyperparameters should either have the same number of values as others or have exactly one value.')
-    
-    # If only one value is provided, use the same value for all samples
-    args.temperature = args.temperature * (max_hyperparameter_len // len(args.temperature))
-    args.top_k = args.top_k * (max_hyperparameter_len // len(args.top_k))
-    args.top_p = args.top_p * (max_hyperparameter_len // len(args.top_p))
-    args.repetition_penalty = args.repetition_penalty * (max_hyperparameter_len // len(args.repetition_penalty))
+    for h in hyperparameters:
+        if (len(getattr(args, h)) not in valid_len):
+            logger.error('Hyperparameters should either have the same number of values as others or have exactly one value.')
+        # If only one value is provided, use the same value for all samples
+        setattr(args, h, getattr(args, h) * (max_hyperparameter_len // len(getattr(args, h))))
 
     logger.info('Will output %d sequences for each input.', args.batch_size*max_hyperparameter_len*args.num_samples)
     logger.info('Effective batch size for each GPU is %d', args.batch_size*args.num_samples)
@@ -467,7 +470,8 @@ def run_generation(args):
                 pad_token_id=pad_token_id,
                 supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
                 prompt_token_id=prompt_token_id,
-                segment_token_ids=[0, 1]
+                segment_token_ids=[0, 1],
+                start_reverse_position_ids=args.start_reverse_position_ids[hyperparameter_idx]
             )
             
             out = out[:, :].tolist()
