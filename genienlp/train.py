@@ -153,7 +153,7 @@ def step(model, batch, iteration, opt,  devices, lr_scheduler=None, grad_clip=No
         opt.zero_grad()
     loss, predictions = model(batch, iteration)
     if torch.isnan(loss).any():
-        raise RuntimeError('Got NaN loss')
+        raise RuntimeError('Got NaN loss %s', str(loss))
     if len(devices) > 1:
         loss = loss.mean()
     non_accumulated_loss = loss.item()
