@@ -411,6 +411,8 @@ def init_model(args, numericalizer, encoder_embeddings, decoder_embeddings, devi
 
 
 def get_linear_schedule_with_warmup(i, dimension, warmup, num_training_steps):
+    i += 1
+    warmup = max(1, warmup)
     if i < warmup:
         return float(i) / float(max(1, warmup))
     return 1. / math.sqrt(dimension) * max(0.0, float(num_training_steps - i) / float(max(1, num_training_steps - warmup)))
