@@ -49,7 +49,7 @@ from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                                   DistilBertConfig, DistilBertForMaskedLM, DistilBertTokenizer,
                                   CamembertConfig, CamembertForMaskedLM, CamembertTokenizer)
 
-from genienlp.util import set_seed
+from genienlp.util import set_seed, get_number_of_lines
 
 
 logger = logging.getLogger(__name__)
@@ -88,9 +88,10 @@ class TextDataset(Dataset):
             self.position_ids = []
             self.segment_ids = []
             max_input_length = 0
+            number_of_lines = get_number_of_lines(file_path)
             with open(file_path, encoding="utf-8") as f:
                 reader = csv.reader(f, delimiter='\t')
-                for row in tqdm(reader, desc='Tokenizing'):
+                for row in tqdm(reader, desc='Tokenizing', total=number_of_lines):
                     line = row[0] + args.start_special_token + row[1] + args.end_special_token
                     tokens = tokenizer.tokenize(line)
                     tokenized_text = tokenizer.convert_tokens_to_ids(tokens)
