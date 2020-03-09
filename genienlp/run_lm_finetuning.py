@@ -66,7 +66,7 @@ MODEL_CLASSES = {
 
 
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, file_path=None, block_size=512, prompt_token='<paraphrase>', evaluate=None):
+    def __init__(self, tokenizer, args, file_path=None, block_size=512, evaluate=None):
         assert os.path.isfile(file_path)
         directory, filename = os.path.split(file_path)
         cached_features_file = os.path.join(directory, os.path.basename(os.path.normpath(args.model_name_or_path)) + '_cached_lm_' + str(block_size) + '_' + filename)
@@ -78,7 +78,8 @@ class TextDataset(Dataset):
         else:
             logger.info("Creating features from dataset file at %s", file_path)
 
-            prompt_token_id = tokenizer.convert_tokens_to_ids(prompt_token)
+            prompt_token_id = tokenizer.convert_tokens_to_ids(args.start_special_token)
+            end_token_id = tokenizer.convert_tokens_to_ids(args.end_special_token)
             segment1_id = 0
             segment2_id = 1
             # print('prompt_token_id = ', prompt_token_id)
@@ -97,6 +98,9 @@ class TextDataset(Dataset):
                     # print('line: ', line)
                     # print('tokens = ', tokens)
                     example = tokenizer.build_inputs_with_special_tokens(tokenized_text)
+                    # Remove duplicate end_token for models like BERT and RoBERTa that already add it
+                    if example[-2] == end_token_id:
+                        example = example[:-1]
                     # print('example = ', example)
                     max_input_length = max(max_input_length, len(example))
                     try:
@@ -611,6 +615,8 @@ def main(args):
     if args.model_type in ["bert", "roberta", "distilbert", "camembert"] and not args.mlm:
         raise ValueError("BERT and RoBERTa do not have LM heads but masked LM heads. They must be run using the --mlm "
                          "flag (masked language modeling).")
+    if args.model_type in ['bert'] and (args.pad_token != '[PAD]' or args.start_special_token != '[SEP]' or args.end_special_token != '[SEP]'):
+        raise ValueError("BERT already has its own special tokens [PAD] and [SEP]. You should use them for better results.")
     if args.eval_data_file is None and args.do_eval:
         raise ValueError("Cannot do evaluation without an evaluation data file. Either supply a file to --eval_data_file "
                          "or remove the --do_eval argument.")
