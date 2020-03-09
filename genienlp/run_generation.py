@@ -260,7 +260,8 @@ def input_heuristics(s: str):
             s += '?'
 
     # replace special tokens with natural-looking exmaples
-    for special_token, natural_form in special_token_mapping.items():
+    sorted_special_token_mapping = sorted(special_token_mapping.items(), key=lambda x:len(x[0]), reverse=True) # sort to alwways start matching from the longest string
+    for special_token, natural_form in sorted_special_token_mapping:
         new_s = s.replace(special_token, natural_form['forward'])
         if new_s != s:
             # print(new_s)
@@ -278,6 +279,7 @@ def output_heuristics(s: str, reverse_map: list):
             back = special_token_mapping[special_token]['back']
         else:
             back = [special_token_mapping[special_token]['forward']]
+        back = sorted(back, key=lambda x:len(x), reverse=True)
         for b in back:
             if b in s:
                 s = s.replace(b, special_token)

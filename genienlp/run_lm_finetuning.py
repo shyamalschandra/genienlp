@@ -92,6 +92,7 @@ class TextDataset(Dataset):
             with open(file_path, encoding="utf-8") as f:
                 reader = csv.reader(f, delimiter='\t')
                 for row in tqdm(reader, desc='Tokenizing', total=number_of_lines):
+                    # TODO we should make use of tokenizer.build_inputs_with_special_tokens(sequence1, sequence2). Add special tokens manualy only if our model does not support two sequences (like GPT2).
                     line = row[0] + args.start_special_token + row[1] + args.end_special_token
                     tokens = tokenizer.tokenize(line)
                     tokenized_text = tokenizer.convert_tokens_to_ids(tokens)
