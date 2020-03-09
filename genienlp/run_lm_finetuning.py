@@ -31,6 +31,7 @@ import re
 import shutil
 import torch
 import math
+import csv
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.distributed import DistributedSampler
@@ -87,7 +88,9 @@ class TextDataset(Dataset):
             self.segment_ids = []
             max_input_length = 0
             with open(file_path, encoding="utf-8") as f:
-                for line in tqdm(f, desc='Tokenizing'):
+                reader = csv.reader(f, delimiter='\t')
+                for row in tqdm(reader, desc='Tokenizing'):
+                    line = row[0] + args.start_special_token + row[1] + args.end_special_token
                     tokens = tokenizer.tokenize(line)
                     tokenized_text = tokenizer.convert_tokens_to_ids(tokens)
                     tokenized_text = tokenized_text[0:block_size] # truncate longer sequences
