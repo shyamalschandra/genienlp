@@ -26,6 +26,8 @@ import json
 import csv
 import re
 import copy
+from matplotlib import pyplot as plt
+import numpy as np
 
 # multiprocessing with CUDA
 from torch.multiprocessing import Process, set_start_method
@@ -48,6 +50,7 @@ from transformers import XLMWithLMHeadModel, XLMTokenizer
 from transformers import BertForMaskedLM, BertTokenizer
 
 from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, top_k_top_p_filtering
+from .metrics import computeBLEU
 
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -294,6 +297,8 @@ def parse_argv(parser):
     parser.add_argument("--input_file", type=str, help="The file from which we read prompts.")
     parser.add_argument('--input_column', type=int, required=True,
                         help='The column in the input file which contains the input sentences.')
+    parser.add_argument('--gold_column', type=int, default=None,
+                        help='The column in the input file which contains the gold sentences. Defaults to --input_column if no gold is available.')
     parser.add_argument("--output_file", type=str, help="When specified, generated text will be written in this file.")
     parser.add_argument("--padding_text", type=str, default="")
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
@@ -334,6 +339,8 @@ def main(args):
     logger.info('Will output %d sequences for each input.', args.batch_size*max_hyperparameter_len*args.num_samples)
     logger.info('Effective batch size for each GPU is %d', args.batch_size*args.num_samples)
 
+    if args.gold_column is None:
+        args.gold_column = args.input_column
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
 
@@ -412,12 +419,14 @@ def run_generation(args):
     all_context_tokens = []
     all_context_lengths = []
     all_position_ids = []
+    all_golds = []
     reverse_maps = []
     number_of_lines = get_number_of_lines(args.input_file)
     with open(args.input_file) as input_file:
         reader = csv.reader(input_file, delimiter='\t')
         for row in tqdm(reader, desc='Reading Input File', total=number_of_lines):
             raw_text = row[args.input_column]
+            all_golds.append(row[args.gold_column])
             # print('before text = ', raw_text)
             raw_text, reverse_map = input_heuristics(raw_text)
             reverse_maps.append(reverse_map)
@@ -472,7 +481,7 @@ def run_generation(args):
                 pad_token_id=pad_token_id,
                 supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
                 prompt_token_id=prompt_token_id,
-                segment_token_ids=[0, 1],
+                segment_token_ids=[tokenizer.convert_tokens_to_ids('<paraphrase>'), tokenizer.convert_tokens_to_ids('</paraphrase>')],
                 start_reverse_position_ids=args.start_reverse_position_ids[hyperparameter_idx]
             )
             
@@ -503,11 +512,33 @@ def run_generation(args):
     # sort the results back to their original order
     t = list(zip(*sorted(list(zip(original_order, all_outputs)))))
     all_outputs = list(t[1])
+    
+    total_bleu = 0.0
+    all_bleu = []
+    for idx, output in enumerate(all_outputs):
+        for sample in output:
+            bleu_score = computeBLEU([sample], [[all_golds[idx]]])
+            all_bleu.append(bleu_score)
+            total_bleu += bleu_score
+
+    # h, b = np.histogram(all_bleu, bins=list(range(0, 105, 5)))
+    # print('all_bleu = ', all_bleu)
+    # print('h = ', h)
+    # print('b = ', b)
+    # h = h / np.sum(h)
+    # print('h = ', h)
+    # plt.title('GPT2 (temp=0) Paraphrases for restaurants')
+    # plt.xlabel('BLEU with original')
+    # plt.ylim((0.0, 1.0))
+    # center = (b[:-1] + b[1:]) / 2
+    # plt.bar(center, h, align='center', width=(b[1]-b[0]))
+    # plt.savefig('./fig.png')
 
     if args.output_file is not None:
         for _ in all_outputs:
             for text in _:
                 output_file.write(text + '\n')
     else:
-        print(json.dumps(all_outputs, indent=2))
+        logger.info(json.dumps(all_outputs, indent=2))
+    logger.info('Average BLEU score = %.2f', total_bleu/len(all_outputs))
 
