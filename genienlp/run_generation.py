@@ -26,7 +26,7 @@ import json
 import csv
 import re
 import copy
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 import numpy as np
 
 # multiprocessing with CUDA
@@ -481,7 +481,7 @@ def run_generation(args):
                 pad_token_id=pad_token_id,
                 supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
                 prompt_token_id=prompt_token_id,
-                segment_token_ids=[0, 1],
+                segment_token_ids=[tokenizer.convert_tokens_to_ids('<paraphrase>'), tokenizer.convert_tokens_to_ids('</paraphrase>')],
                 start_reverse_position_ids=args.start_reverse_position_ids[hyperparameter_idx]
             )
             
