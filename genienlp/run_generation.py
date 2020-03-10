@@ -27,7 +27,7 @@ import csv
 import re
 import copy
 # from matplotlib import pyplot as plt
-import numpy as np
+# import numpy as np
 
 # multiprocessing with CUDA
 from torch.multiprocessing import Process, set_start_method
@@ -143,7 +143,7 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
         # rep_penalty = np.random.random(length) < 0.1
         # original_rep_penalty = repetition_penalty
         # print('rep_penalty = ', rep_penalty)
-        for _ in trange(length):
+        for _ in range(length):
             inputs = {'input_ids': generated, 'position_ids': position_ids[:, :next_index], 'token_type_ids': segment_ids[:, :next_index]}
             if is_xlnet: 
                 # XLNet is a direct (predict same token, not next token) and bi-directional model by default
