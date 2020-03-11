@@ -82,6 +82,9 @@ class TextDataset(Dataset):
             end_token_id = tokenizer.convert_tokens_to_ids(args.end_special_token)
             segment1_id = 0
             segment2_id = 1
+            if args.model_type == 'gpt2':
+                segment1_id = prompt_token_id
+                segment2_id = end_token_id
             # print('prompt_token_id = ', prompt_token_id)
             self.examples = []
             self.labels = []

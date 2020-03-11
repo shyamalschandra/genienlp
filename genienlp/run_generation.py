@@ -26,8 +26,6 @@ import json
 import csv
 import re
 import copy
-# from matplotlib import pyplot as plt
-# import numpy as np
 
 # multiprocessing with CUDA
 from torch.multiprocessing import Process, set_start_method
@@ -481,7 +479,7 @@ def run_generation(args):
                 pad_token_id=pad_token_id,
                 supports_past=args.model_type in ['gpt2', 'openai-gpt', 'transfo-xl', 'xlnet', 'ctrl'],
                 prompt_token_id=prompt_token_id,
-                segment_token_ids=[tokenizer.convert_tokens_to_ids('<paraphrase>'), tokenizer.convert_tokens_to_ids('</paraphrase>')],
+                segment_token_ids=[tokenizer.convert_tokens_to_ids(args.prompt_token), tokenizer.convert_tokens_to_ids(args.stop_tokens[0])] if args.model_type=='gpt2' else [0, 1],
                 start_reverse_position_ids=args.start_reverse_position_ids[hyperparameter_idx]
             )
             
@@ -521,13 +519,15 @@ def run_generation(args):
             all_bleu.append(bleu_score)
             total_bleu += bleu_score
 
+    # from matplotlib import pyplot as plt
+    # import numpy as np
     # h, b = np.histogram(all_bleu, bins=list(range(0, 105, 5)))
     # print('all_bleu = ', all_bleu)
     # print('h = ', h)
     # print('b = ', b)
     # h = h / np.sum(h)
     # print('h = ', h)
-    # plt.title('GPT2 (temp=0) Paraphrases for restaurants')
+    # plt.title('GPT2 (temp=0, penalty=1.0) Paraphrases for restaurants')
     # plt.xlabel('BLEU with original')
     # plt.ylim((0.0, 1.0))
     # center = (b[:-1] + b[1:]) / 2
