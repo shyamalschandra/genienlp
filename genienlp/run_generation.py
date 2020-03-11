@@ -141,7 +141,7 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
         # rep_penalty = np.random.random(length) < 0.1
         # original_rep_penalty = repetition_penalty
         # print('rep_penalty = ', rep_penalty)
-        for _ in range(length):
+        for _ in trange(length):
             inputs = {'input_ids': generated, 'position_ids': position_ids[:, :next_index], 'token_type_ids': segment_ids[:, :next_index]}
             if is_xlnet: 
                 # XLNet is a direct (predict same token, not next token) and bi-directional model by default
@@ -300,7 +300,7 @@ def parse_argv(parser):
     parser.add_argument("--output_file", type=str, help="When specified, generated text will be written in this file.")
     parser.add_argument("--padding_text", type=str, default="")
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
-    parser.add_argument("--length", type=int, default=10, help='The generated sentences will have a maximum length of len(input) + arg.length')
+    parser.add_argument("--length", type=int, default=15, help='The generated sentences will have a maximum length of len(input) + arg.length')
     parser.add_argument("--num_samples", type=int, default=1)
 
     # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
