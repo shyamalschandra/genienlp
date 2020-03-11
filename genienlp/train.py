@@ -433,8 +433,8 @@ def init_opt(args, model, logger):
         if args.transformer_lr:
             opt = torch.optim.Adam(model.params, lr=args.transformer_lr_multiply, betas=(0.9, 0.98), eps=1e-9,
                                    weight_decay=args.weight_decay)
-            # lr_lambda = partial(get_transformer_learning_rate, dimension=args.dimension, warmup=args.warmup)
-            lr_lambda = partial(get_linear_schedule_with_warmup, dimension=args.dimension, warmup=args.warmup, num_training_steps=args.train_iterations[0])
+            lr_lambda = partial(get_transformer_learning_rate, dimension=args.dimension, warmup=args.warmup)
+            # lr_lambda = partial(get_linear_schedule_with_warmup, dimension=args.dimension, warmup=args.warmup, num_training_steps=args.train_iterations[0])
             scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
         else:
             opt = torch.optim.Adam(model.params, lr=args.lr_rate, betas=(args.beta0, 0.999),
