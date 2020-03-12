@@ -302,6 +302,7 @@ def parse_argv(parser):
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
     parser.add_argument("--length", type=int, default=15, help='The generated sentences will have a maximum length of len(input) + arg.length')
     parser.add_argument("--num_samples", type=int, default=1)
+    parser.add_argument("--skip_heuristics", action='store_true', help='If True, will not replace special word such as NUMBER_0 in the input.')
 
     # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
     parser.add_argument("--start_reverse_position_ids", type=int, nargs='+', default=[None],
@@ -426,8 +427,11 @@ def run_generation(args):
             raw_text = row[args.input_column]
             all_golds.append(row[args.gold_column])
             # print('before text = ', raw_text)
-            raw_text, reverse_map = input_heuristics(raw_text)
-            reverse_maps.append(reverse_map)
+            if args.skip_heuristics:
+                reverse_maps.append({})
+            else:
+                raw_text, reverse_map = input_heuristics(raw_text)
+                reverse_maps.append(reverse_map)
             # print('after text = ', raw_text)
             raw_text += args.prompt_token
             if args.model_type in ["transfo-xl", "xlnet"]:
@@ -502,7 +506,10 @@ def run_generation(args):
                         min_index += 1
                     text = text[:min_index]
 
-                text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
+                if args.skip_heuristics:
+                    text = text.strip()
+                else:
+                    text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
                 batch_outputs[i % (batch_slice[1]-batch_slice[0])].append(text)
 
         all_outputs.extend(batch_outputs)
@@ -546,5 +553,5 @@ def run_generation(args):
     else:
         logger.info(json.dumps(all_outputs, indent=2))
     logger.info('Average BLEU score = %.2f', total_bleu/count)
-    logger.info('Exact match score = %.2f', exact_match/count)
+    logger.info('Exact match score = %.2f', exact_match/count*100)
 
