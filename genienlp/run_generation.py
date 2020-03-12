@@ -513,11 +513,16 @@ def run_generation(args):
     
     total_bleu = 0.0
     all_bleu = []
+    exact_match = 0
+    count = 0
     for idx, output in enumerate(all_outputs):
         for sample in output:
+            if re.sub('\s+', '', sample) == re.sub('\s+', '', all_golds[idx]):
+                exact_match += 1
             bleu_score = computeBLEU([sample], [[all_golds[idx]]])
             all_bleu.append(bleu_score)
             total_bleu += bleu_score
+            count += 1
 
     # from matplotlib import pyplot as plt
     # import numpy as np
@@ -540,5 +545,6 @@ def run_generation(args):
                 output_file.write(text + '\n')
     else:
         logger.info(json.dumps(all_outputs, indent=2))
-    logger.info('Average BLEU score = %.2f', total_bleu/len(all_outputs))
+    logger.info('Average BLEU score = %.2f', total_bleu/count)
+    logger.info('Exact match score = %.2f', exact_match/count)
 
