@@ -85,7 +85,8 @@ the Virgin Mary, prompting him to become a priest. Rasputin quickly becomes famo
 with people, even a bishop, begging for his blessing. <eod> </s> <eos>"""
 
 
-def sample_sequence(model, length, context, position_ids, num_samples=1, temperature=[1], top_k=[0], top_p=[0.0], repetition_penalty=[1.0],
+def sample_sequence(model, length, context, position_ids, num_samples,
+                    temperature=1.0, top_k=0, top_p=1.0, copy=0, repetition_penalty=1.0,
                     is_xlnet=False, is_xlm_mlm=False, xlm_mask_token=None, xlm_lang=None, device='cpu',
                     stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None,
                     start_reverse_position_ids=None):
@@ -106,25 +107,26 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
     # should not change the elements of context since it will change them outside this function as well.
     padded_context = []
     for i in range(len(context)):
-        padded_context.append(context[i] + ([pad_token_id] * (max_length-len(context[i]))))
+        c = min(copy, len(context[i])-1) # -1 so that we do not copy prompt_token
+        padded_context.append(context[i] + context[i][:c] + ([pad_token_id] * (max_length-len(context[i])+copy-c)))
     
     context = torch.tensor(padded_context, dtype=torch.long, device=device)
     context = context.repeat(num_samples, 1)
-    next_index = min_length
+    next_index = min_length + min(copy, min_length-1)
     generated = context[:, :next_index]
     should_finish = None
-    length = max_length + length
+    length = max_length + (max_length - next_index) + length # generate till max_length, then generate another max_length+length tokens
     segment_ids = []
 
     # should not change the elements of position_ids since it will change them outside this function as well.
     completed_position_ids = []
     for i in range(len(position_ids)):
         p = position_ids[i]
-        segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+max_length-len(p)))
+        segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+next_index-len(p)))
         if start_reverse_position_ids is None:
-            completed_position_ids.append(p + list(range(length + max_length - len(p))))
+            completed_position_ids.append(p + list(range(length + next_index - len(p))))
         else:
-            completed_position_ids.append(p + list(reversed(range(start_reverse_position_ids+len(p)))) + [0]*(length + max_length-start_reverse_position_ids-2*len(p)))
+            completed_position_ids.append(p + list(reversed(range(start_reverse_position_ids+len(p)))) + [0]*(length + next_index-start_reverse_position_ids-2*len(p)))
 
     position_ids = torch.tensor(completed_position_ids, dtype=torch.long, device=device)
     position_ids = position_ids.repeat(num_samples, 1)
@@ -195,11 +197,14 @@ def sample_sequence(model, length, context, position_ids, num_samples=1, tempera
 
             filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
 
-
+            # sorted_logits, sorted_indices = torch.sort(filtered_logits, descending=True)
+            # print('next_token = ', tokenizer.convert_ids_to_tokens(sorted_indices.flatten()[0:20].tolist()))
             if temperature == 0: # greedy sampling:
                 next_token = torch.argmax(filtered_logits, dim=-1).unsqueeze(-1)
             else:
                 next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
+                
+            # next_token_logit = filtered_logits.gather(1, next_token)
 
             # throw away the tokens that we already have from the context
             if next_index < context.shape[1]:
@@ -313,6 +318,8 @@ def parse_argv(parser):
                         help="primarily useful for CTRL model; in that case, use 1.2")
     parser.add_argument("--top_k", type=int, nargs='+', default=[0], help='0 disables top-k filtering')
     parser.add_argument("--top_p", type=float, nargs='+', default=[0.9], help='1.0 disables top-p filtering')
+    parser.add_argument("--copy", type=int, nargs='+', default=[0],
+                        help='Number of tokens that will be copied at the beginning of generation. Helps preserve the original meaning of the input sequence.')
 
     parser.add_argument("--no_cuda", action='store_true',
                         help="Avoid using CUDA when available")
@@ -326,7 +333,7 @@ def parse_argv(parser):
                         help="Batch size for text generation for each GPU.")
 
 def main(args):
-    hyperparameters = ['temperature', 'top_k', 'top_p', 'repetition_penalty', 'start_reverse_position_ids']
+    hyperparameters = ['temperature', 'top_k', 'top_p', 'repetition_penalty', 'start_reverse_position_ids', 'copy']
     max_hyperparameter_len = max([len(getattr(args, h)) for h in hyperparameters])
     valid_len = [1, max_hyperparameter_len]
     for h in hyperparameters:
@@ -473,6 +480,7 @@ def run_generation(args):
                 temperature=args.temperature[hyperparameter_idx],
                 top_k=args.top_k[hyperparameter_idx],
                 top_p=args.top_p[hyperparameter_idx],
+                copy=args.copy[hyperparameter_idx],
                 repetition_penalty=args.repetition_penalty[hyperparameter_idx],
                 is_xlnet=bool(args.model_type == "xlnet"),
                 is_xlm_mlm=is_xlm_mlm,
