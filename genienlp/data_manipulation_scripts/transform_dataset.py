@@ -20,6 +20,7 @@ def remove_thingtalk_quotes(thingtalk):
     thingtalk = thingtalk.replace('<temp>', '""')
     return thingtalk, quote_values
 
+
 def main():
     parser = ArgumentParser()
     parser.add_argument('input', type=str,
@@ -44,8 +45,8 @@ def main():
                         help='The column index in the input file that contains the ThingTalk code.')
 
     # These arguments are effective only if --transformation=get_wrong_thingtalk
-    parser.add_argument('--remove_if_quotes_dont_match', action='store_true',
-                        help='Remove examples if the values inside quotations in ThingTalk cannot be found in the utterance.')
+    parser.add_argument('--remove_with_heuristics', action='store_true',
+                        help='Remove examples if the values inside quotations in ThingTalk have changed or special words like NUMBER_0 cannot be found in TT anymore.')
     parser.add_argument('--replace_with_gold', action='store_true', help='Instead of the original ThingTalk, output what the parser said is gold.')
 
 
@@ -72,7 +73,7 @@ def main():
             gold_thingtalk_count = 0
             
         duplicate_count = 0
-        no_quote_count = 0
+        heuristic_count = 0
         written_count = 0
         if args.remove_duplicates:
             seen_natural_utterances = set()
@@ -88,16 +89,20 @@ def main():
                 gold_thingtalk_count += 1
             elif args.transformation == 'get_wrong_thingtalk':
                 if row[2] != gold_thingtalks[gold_thingtalk_count]:
-                    if args.remove_if_quotes_dont_match:
+                    if args.remove_with_heuristics:
                         _, new_quote_values = remove_thingtalk_quotes(row[2])
                         _, gold_quote_values = remove_thingtalk_quotes(gold_thingtalks[gold_thingtalk_count])
                         if new_quote_values != gold_quote_values:
                             output_rows = []
-                            no_quote_count += 1
+                            heuristic_count += 1
                         else:
                             if args.replace_with_gold:
                                 row[2] = gold_thingtalks[gold_thingtalk_count]
-                            output_rows = [row]
+                            if set(re.findall('[A-Z]+_[0-9]', row[1])) != set(re.findall('[A-Z]+_[0-9]', row[2])):
+                                output_rows = []
+                                heuristic_count += 1
+                            else:
+                                output_rows = [row]
                     else:
                         if args.replace_with_gold:
                             row[2] = gold_thingtalks[gold_thingtalk_count]
@@ -134,7 +139,7 @@ def main():
                         output_row += '\t'
                 output_file.write(output_row + '\n')
         print('Removed %d duplicate rows' % duplicate_count)
-        print('Removed %d rows because the thingtalk quote value was not preserved' % no_quote_count)
+        print('Removed %d rows because the thingtalk quote did not satisfy heuristic rules' % heuristic_count)
         print('Output size is %d rows' % written_count)
 
 if __name__ == '__main__':
