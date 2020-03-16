@@ -573,7 +573,7 @@ def run_generation(args):
                 # print('text = ', text)
                 # print('-'*10)
 
-                assert tokenizer.pad_token not in text
+                # assert tokenizer.pad_token not in text
                 text = text.replace(tokenizer.pad_token, '')
                 text = re.sub('\s\s+', ' ', text) # remove duplicate white spaces
                 text = text.strip()

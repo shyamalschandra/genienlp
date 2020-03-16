@@ -32,6 +32,7 @@ import shutil
 import torch
 import math
 import csv
+import numpy as np
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.distributed import DistributedSampler
@@ -67,9 +68,11 @@ MODEL_CLASSES = {
 
 class TextDataset(Dataset):
     def __init__(self, tokenizer, args, file_path=None, block_size=512, evaluate=None):
+        self.tokenizer = tokenizer
+        self.block_size = block_size
         assert os.path.isfile(file_path)
         directory, filename = os.path.split(file_path)
-        cached_features_file = os.path.join(directory, os.path.basename(os.path.normpath(args.model_name_or_path)) + '_cached_lm_' + str(block_size) + '_' + filename)
+        cached_features_file = os.path.join(directory, os.path.basename(os.path.normpath(args.model_name_or_path)) + '_cached_lm_' + str(self.block_size) + '_' + filename)
 
         if os.path.exists(cached_features_file) and not args.overwrite_cache:
             logger.info("Loading features from cached file %s", cached_features_file)
@@ -78,58 +81,105 @@ class TextDataset(Dataset):
         else:
             logger.info("Creating features from dataset file at %s", file_path)
 
-            prompt_token_id = tokenizer.convert_tokens_to_ids(args.start_special_token)
-            end_token_id = tokenizer.convert_tokens_to_ids(args.end_special_token)
-            segment1_id = 0
-            segment2_id = 1
+            self.prompt_token_id = self.tokenizer.convert_tokens_to_ids(args.start_special_token)
+            self.end_token_id = self.tokenizer.convert_tokens_to_ids(args.end_special_token)
+            self.segment1_id = 0
+            self.segment2_id = 1
             if args.model_type == 'gpt2':
-                segment1_id = prompt_token_id
-                segment2_id = end_token_id
+                self.segment1_id = self.prompt_token_id
+                self.segment2_id = self.end_token_id
             # print('prompt_token_id = ', prompt_token_id)
             self.examples = []
             self.labels = []
             self.position_ids = []
             self.segment_ids = []
-            max_input_length = 0
+            self.max_input_length = 0
+
+            if not evaluate and args.aux_train_data_file is not None:
+                number_of_lines = get_number_of_lines(args.aux_train_data_file)
+                with open(args.aux_train_data_file, encoding="utf-8") as f:
+                    reader = csv.reader(f, delimiter='\t')
+                    for row in tqdm(reader, desc='Tokenizing Auxiliary File', total=number_of_lines):
+                        self._add_example(None, row[0], args)
+
             number_of_lines = get_number_of_lines(file_path)
             with open(file_path, encoding="utf-8") as f:
                 reader = csv.reader(f, delimiter='\t')
                 for row in tqdm(reader, desc='Tokenizing', total=number_of_lines):
-                    # TODO we should make use of tokenizer.build_inputs_with_special_tokens(sequence1, sequence2). Add special tokens manualy only if our model does not support two sequences (like GPT2).
-                    line = row[0] + args.start_special_token + row[1] + args.end_special_token
-                    tokens = tokenizer.tokenize(line)
-                    tokenized_text = tokenizer.convert_tokens_to_ids(tokens)
-                    tokenized_text = tokenized_text[0:block_size] # truncate longer sequences
-                    # print('line: ', line)
-                    # print('tokens = ', tokens)
-                    example = tokenizer.build_inputs_with_special_tokens(tokenized_text)
-                    # Remove duplicate end_token for models like BERT and RoBERTa that already add it
-                    if example[-2] == end_token_id:
-                        example = example[:-1]
-                    # print('example = ', example)
-                    max_input_length = max(max_input_length, len(example))
-                    try:
-                        prompt_token_location = example.index(prompt_token_id)
-                    except ValueError:
-                        logger.warning('Prompt token not found after truncating the input. Dropping the example.')
-                        continue
+                    self._add_example(row[0], row[1], args)
 
-                    self.examples.append(example)
-                    if args.train_all_tokens and not evaluate:
-                        self.labels.append(example)
-                    else: # During evaluation, we only care about the output sequence so we mask the input
-                        self.labels.append([-100]*(prompt_token_location+1)+example[prompt_token_location+1:])
-                    
-                    position_ids2 = range(len(example)-prompt_token_location-1)
-                    if args.reverse_position_ids:
-                        position_ids2 = reversed(position_ids2)
-                    self.position_ids.append(list(range(prompt_token_location+1)) + list(position_ids2))
-                    self.segment_ids.append([segment1_id]*(prompt_token_location+1) + [segment2_id]*(len(example)-prompt_token_location-1))
+            
 
-            logger.info('Maximum input length: %d', max_input_length)
+            logger.info('Maximum input length: %d', self.max_input_length)
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:
                 pickle.dump((self.examples, self.labels, self.position_ids, self.segment_ids), handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _add_example(self, input_sequence, output_sequence, args):
+        """
+        Args:
+            input_sequence: if None, a corrupted version of the output_sequence will be used
+        """
+        # TODO we should make use of tokenizer.build_inputs_with_special_tokens(sequence1, sequence2). Add special tokens manualy only if our model does not support two sequences (like GPT2).
+        if input_sequence is None:
+            # changed = False
+            input_token_ids = self.tokenizer.encode(output_sequence)
+            new_input_token_ids = []
+            delete = np.random.random(len(input_token_ids)) < 0.01
+            for i in range(len(delete)):
+                if not delete[i]:
+                    new_input_token_ids.append(input_token_ids[i])
+                # else:
+                    # changed = True
+            insert = np.random.random(len(new_input_token_ids)+1) < 0.01
+            shift = 0
+            for i in range(len(insert)):
+                if insert[i]:
+                    # changed = True
+                    new_input_token_ids.insert(i+shift, np.random.randint(self.tokenizer.vocab_size))
+                    shift += 1
+            swap = np.random.random(len(new_input_token_ids)) < 0.01
+            for i in range(len(swap)):
+                if swap[i]:
+                    # changed = True
+                    other_idx = np.random.choice([j for j in range(max(0, i-5), min(i+5+1, len(new_input_token_ids))) if j != 0])
+                    temp = new_input_token_ids[i]
+                    new_input_token_ids[i] = new_input_token_ids[other_idx]
+                    new_input_token_ids[other_idx] = temp
+            # if changed:
+                # logger.info('Input is corrputed from %s to %s', str(input_token_ids), str(new_input_token_ids))
+            input_token_ids = new_input_token_ids
+        else:
+            input_token_ids = self.tokenizer.encode(input_sequence)
+        output_token_ids = self.tokenizer.encode(output_sequence)
+        tokenized_text = input_token_ids + [self.tokenizer.convert_tokens_to_ids(args.start_special_token)] + \
+                         output_token_ids + [self.tokenizer.convert_tokens_to_ids(args.end_special_token)]
+        tokenized_text = tokenized_text[0:self.block_size] # truncate longer sequences
+        # print('tokenized_text = ', tokenized_text)
+
+        example = self.tokenizer.build_inputs_with_special_tokens(tokenized_text)
+        # Remove duplicate end_token for models like BERT and RoBERTa that already add it
+        if example[-2] == self.end_token_id:
+            example = example[:-1]
+        # print('example = ', example)
+        self.max_input_length = max(self.max_input_length, len(example))
+        try:
+            prompt_token_location = example.index(self.prompt_token_id)
+        except ValueError:
+            logger.warning('Prompt token not found after truncating the input. Dropping the example.')
+            return
+
+        self.examples.append(example)
+        if args.train_all_tokens and not evaluate:
+            self.labels.append(example)
+        else: # During evaluation, we only care about the output_sequence so we mask the input
+            self.labels.append([-100]*(prompt_token_location+1)+example[prompt_token_location+1:])
+        
+        position_ids2 = range(len(example)-prompt_token_location-1)
+        if args.reverse_position_ids:
+            position_ids2 = reversed(position_ids2)
+        self.position_ids.append(list(range(prompt_token_location+1)) + list(position_ids2))
+        self.segment_ids.append([self.segment1_id]*(prompt_token_location+1) + [self.segment2_id]*(len(example)-prompt_token_location-1))
 
     def __len__(self):
         return len(self.examples)
@@ -515,12 +565,14 @@ def add_special_tokens(model, tokenizer, additional_special_tokens, pad_token=No
 def parse_argv(parser):
     ## Required parameters
     parser.add_argument("--train_data_file", default=None, type=str, required=True,
-                        help="The input training data file (a text file).")
+                        help="The input training data file.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--tensorboard_dir", default=None, type=str, required=True,
                         help="The output directory where the tensorboard files will be written.")
-                        
+    
+    parser.add_argument("--aux_train_data_file", default=None, type=str,
+                        help="An input training data file for the target domain.")
     parser.add_argument('--start_special_token', type=str, default='<paraphrase>',
                         help='The special token for the start of paraphrases.')
     parser.add_argument('--end_special_token', type=str, default='</paraphrase>',
