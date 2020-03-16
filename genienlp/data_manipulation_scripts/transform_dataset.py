@@ -33,8 +33,12 @@ def main():
                         help='The path to the file containing the dataset with a correct thingtalk column.')
     parser.add_argument('--num_new_queries', type=int, default=1,
                         help='Number of new queries per old query. Valid if "--transformation replace_queries" is used.')
-    parser.add_argument('--transformation', type=str, choices=['remove_thingtalk_quotes', 'replace_queries', 'remove_wrong_thingtalk', 'get_wrong_thingtalk', 'none'], default='none',
-                        help='The type of transformation to apply.')
+    parser.add_argument('--transformation', type=str, choices=['remove_thingtalk_quotes',
+                                                                'replace_queries',
+                                                                'remove_wrong_thingtalk',
+                                                                'get_wrong_thingtalk',
+                                                                'merge_input_file_with_query_file',
+                                                                'none'], default='none', help='The type of transformation to apply.')
     parser.add_argument('--remove_duplicates', action='store_true',
                         help='Remove duplicate natural utterances. Note that this also removes cases where a natural utterance has multiple ThingTalk codes.')
     parser.add_argument('--output_columns', type=int, nargs='+', default=None,
@@ -59,7 +63,7 @@ def main():
 
     with open(args.input, 'r') as input_file, open(args.output, 'w') as output_file:
         reader = csv.reader(input_file, delimiter='\t')
-        if args.transformation == 'replace_queries':
+        if args.transformation in ['replace_queries', 'merge_input_file_with_query_file']:
             new_queries = []
             query_file = open(args.query_file, 'r')
             for q in query_file:
@@ -110,6 +114,13 @@ def main():
                 else:
                     output_rows = []
                 gold_thingtalk_count += 1
+            elif args.transformation == 'merge_input_file_with_query_file':
+                output_rows.append(row)
+                for _ in range(args.num_new_queries):
+                    row = row.copy()
+                    row[1] = new_queries[new_query_count]
+                    output_rows.append(row)
+                    new_query_count += 1
             elif args.transformation == 'replace_queries':
                 for _ in range(args.num_new_queries):
                     row[1] = new_queries[new_query_count]
