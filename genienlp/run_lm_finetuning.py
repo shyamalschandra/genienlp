@@ -564,13 +564,14 @@ def add_special_tokens(model, tokenizer, additional_special_tokens, pad_token=No
 
 def parse_argv(parser):
     ## Required parameters
-    parser.add_argument("--train_data_file", default=None, type=str, required=True,
-                        help="The input training data file.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--tensorboard_dir", default=None, type=str, required=True,
-                        help="The output directory where the tensorboard files will be written.")
     
+    ## Other parameters
+    parser.add_argument("--tensorboard_dir", default=None, type=str,
+                        help="The output directory where the tensorboard files will be written.")
+    parser.add_argument("--train_data_file", default=None, type=str,
+                        help="The input training data file.")
     parser.add_argument("--aux_train_data_file", default=None, type=str,
                         help="An input training data file for the target domain.")
     parser.add_argument('--start_special_token', type=str, default='<paraphrase>',
@@ -586,7 +587,6 @@ def parse_argv(parser):
     parser.add_argument("--reverse_position_ids", action='store_true',
                         help='If we assume we know the length of the output sequence beforehand, we can do a better job at generation.')
 
-    ## Other parameters
     parser.add_argument("--eval_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
 
@@ -674,6 +674,13 @@ def main(args):
                          "flag (masked language modeling).")
     if args.model_type in ['bert'] and (args.pad_token != '[PAD]' or args.start_special_token != '[SEP]' or args.end_special_token != '[SEP]'):
         raise ValueError("BERT already has its own special tokens [PAD] and [SEP]. You should use them for better results.")
+    if args.do_train:
+        if args.train_data_file is None:
+            raise ValueError("Cannot do training without a training data file. Either supply a file to --train_data_file "
+                            "or remove the --do_train argument.")
+        if args.tensorboard_dir is None:
+            raise ValueError("Cannot do training without specifying --tensorboard_dir")
+
     if args.eval_data_file is None and args.do_eval:
         raise ValueError("Cannot do evaluation without an evaluation data file. Either supply a file to --eval_data_file "
                          "or remove the --do_eval argument.")
