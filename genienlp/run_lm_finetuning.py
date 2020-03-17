@@ -100,7 +100,7 @@ class TextDataset(Dataset):
                 with open(args.aux_train_data_file, encoding="utf-8") as f:
                     reader = csv.reader(f, delimiter='\t')
                     for row in tqdm(reader, desc='Tokenizing Auxiliary File', total=number_of_lines):
-                        self._add_example(None, row[0], args)
+                        self._add_example(row[0], None, args)
 
             number_of_lines = get_number_of_lines(file_path)
             with open(file_path, encoding="utf-8") as f:
@@ -121,39 +121,14 @@ class TextDataset(Dataset):
             input_sequence: if None, a corrupted version of the output_sequence will be used
         """
         # TODO we should make use of tokenizer.build_inputs_with_special_tokens(sequence1, sequence2). Add special tokens manualy only if our model does not support two sequences (like GPT2).
-        if input_sequence is None:
-            # changed = False
-            input_token_ids = self.tokenizer.encode(output_sequence)
-            new_input_token_ids = []
-            delete = np.random.random(len(input_token_ids)) < 0.01
-            for i in range(len(delete)):
-                if not delete[i]:
-                    new_input_token_ids.append(input_token_ids[i])
-                # else:
-                    # changed = True
-            insert = np.random.random(len(new_input_token_ids)+1) < 0.01
-            shift = 0
-            for i in range(len(insert)):
-                if insert[i]:
-                    # changed = True
-                    new_input_token_ids.insert(i+shift, np.random.randint(self.tokenizer.vocab_size))
-                    shift += 1
-            swap = np.random.random(len(new_input_token_ids)) < 0.01
-            for i in range(len(swap)):
-                if swap[i]:
-                    # changed = True
-                    other_idx = np.random.choice([j for j in range(max(0, i-5), min(i+5+1, len(new_input_token_ids))) if j != 0])
-                    temp = new_input_token_ids[i]
-                    new_input_token_ids[i] = new_input_token_ids[other_idx]
-                    new_input_token_ids[other_idx] = temp
-            # if changed:
-                # logger.info('Input is corrputed from %s to %s', str(input_token_ids), str(new_input_token_ids))
-            input_token_ids = new_input_token_ids
+        
+        input_token_ids = self.tokenizer.encode(input_sequence) + [self.tokenizer.convert_tokens_to_ids(args.start_special_token)]
+        if output_sequence is None:
+            output_token_ids = []
         else:
-            input_token_ids = self.tokenizer.encode(input_sequence)
-        output_token_ids = self.tokenizer.encode(output_sequence)
-        tokenized_text = input_token_ids + [self.tokenizer.convert_tokens_to_ids(args.start_special_token)] + \
-                         output_token_ids + [self.tokenizer.convert_tokens_to_ids(args.end_special_token)]
+            output_token_ids = self.tokenizer.encode(output_sequence) + [self.tokenizer.convert_tokens_to_ids(args.end_special_token)]
+        tokenized_text = input_token_ids + output_token_ids
+        
         tokenized_text = tokenized_text[0:self.block_size] # truncate longer sequences
         # print('tokenized_text = ', tokenized_text)
 
@@ -170,7 +145,7 @@ class TextDataset(Dataset):
             return
 
         self.examples.append(example)
-        if args.train_all_tokens and not evaluate:
+        if args.train_all_tokens and not evaluate or output_sequence is None:
             self.labels.append(example)
         else: # During evaluation, we only care about the output_sequence so we mask the input
             self.labels.append([-100]*(prompt_token_location+1)+example[prompt_token_location+1:])
@@ -180,6 +155,9 @@ class TextDataset(Dataset):
             position_ids2 = reversed(position_ids2)
         self.position_ids.append(list(range(prompt_token_location+1)) + list(position_ids2))
         self.segment_ids.append([self.segment1_id]*(prompt_token_location+1) + [self.segment2_id]*(len(example)-prompt_token_location-1))
+
+        # print('position_ids = ', self.position_ids[-1])
+        # print('segment_ids = ', self.segment_ids[-1])
 
     def __len__(self):
         return len(self.examples)
@@ -197,8 +175,15 @@ def get_transformer_schedule_with_warmup(optimizer, num_warmup_steps, num_traini
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-def load_and_cache_examples(args, tokenizer, evaluate=False):
-    dataset = TextDataset(tokenizer, args, file_path=args.eval_data_file if evaluate else args.train_data_file, block_size=args.block_size, evaluate=evaluate)
+def load_and_cache_examples(args, tokenizer, evaluate=False, aux=False):
+    if evaluate:
+        if aux:
+            file_path = args.aux_eval_data_file
+        else:
+            file_path = args.eval_data_file
+    else:
+        file_path = args.train_data_file
+    dataset = TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size, evaluate=evaluate)
     return dataset
 
 
@@ -436,6 +421,10 @@ def train(args, train_dataset, model, tokenizer):
                     # Log metrics
                     if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
                         results = evaluate(args, model, tokenizer)
+                        if args.aux_eval_data_file is not None:
+                            aux_results = evaluate(args, model, tokenizer, aux=True)
+                            for key, value in aux_results.items():
+                                tb_writer.add_scalar('auxiliary_eval_{}'.format(key), value, global_step)
                         if best_eval_perplexity > results['perplexity']:
                             best_eval_perplexity = results['perplexity']
                             if not os.path.exists(args.output_dir):
@@ -490,11 +479,11 @@ def train(args, train_dataset, model, tokenizer):
     return global_step, tr_loss / global_step
 
 
-def evaluate(args, model, tokenizer, prefix=""):
+def evaluate(args, model, tokenizer, prefix="", aux=False):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
 
-    eval_dataset = load_and_cache_examples(args, tokenizer, evaluate=True)
+    eval_dataset = load_and_cache_examples(args, tokenizer, evaluate=True, aux=aux)
 
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
@@ -589,6 +578,8 @@ def parse_argv(parser):
 
     parser.add_argument("--eval_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
+    parser.add_argument("--aux_eval_data_file", default=None, type=str,
+                        help="An additional input evaluation data file to evaluate the perplexity on (a text file).")
 
     parser.add_argument("--model_type", default="bert", type=str,
                         help="The model architecture to be fine-tuned.")
