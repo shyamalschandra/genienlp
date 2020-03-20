@@ -171,7 +171,7 @@ def get_transformer_schedule_with_warmup(optimizer, num_warmup_steps, num_traini
 
     def lr_lambda(current_step):
         current_step += 1
-        return min(1 / math.sqrt(current_step), current_step / (num_warmup_steps * math.sqrt(num_warmup_steps)))
+        return 1. / math.sqrt(dimension) * min(1 / math.sqrt(current_step), current_step / (num_warmup_steps * math.sqrt(num_warmup_steps)))
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
