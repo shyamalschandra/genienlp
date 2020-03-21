@@ -122,11 +122,11 @@ class TextDataset(Dataset):
         """
         # TODO we should make use of tokenizer.build_inputs_with_special_tokens(sequence1, sequence2). Add special tokens manualy only if our model does not support two sequences (like GPT2).
         
-        input_token_ids = self.tokenizer.encode(input_sequence) + [self.tokenizer.convert_tokens_to_ids(args.start_special_token)]
+        input_token_ids = self.tokenizer.encode(input_sequence, add_special_tokens=False) + [self.tokenizer.convert_tokens_to_ids(args.start_special_token)]
         if output_sequence is None:
             output_token_ids = []
         else:
-            output_token_ids = self.tokenizer.encode(output_sequence) + [self.tokenizer.convert_tokens_to_ids(args.end_special_token)]
+            output_token_ids = self.tokenizer.encode(output_sequence, add_special_tokens=False) + [self.tokenizer.convert_tokens_to_ids(args.end_special_token)]
         tokenized_text = input_token_ids + output_token_ids
         
         tokenized_text = tokenized_text[0:self.block_size] # truncate longer sequences
