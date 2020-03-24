@@ -95,7 +95,7 @@ def apply_repetition_penalty(logits, context, repetition_penalty, prompt_token_i
                     # logits[i, _] *= repetition_penalty
     return logits
 
-def sample_sequence(model, length, context, position_ids, num_samples,
+def sample_sequence(model, length, context, num_samples,
                     temperature=1.0, top_k=0, top_p=1.0, copy=0, repetition_penalty=1.0,
                     is_xlnet=False, is_xlm_mlm=False, xlm_mask_token=None, xlm_lang=None, device='cpu',
                     stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None,
@@ -104,7 +104,6 @@ def sample_sequence(model, length, context, position_ids, num_samples,
     Generates sequence of tokens for the batch of input contexts.
     Inputs:
         context: a list of token_ids, sorted by length from longest to shortest
-        position_ids: a list of indicate that indicates the positional embedding we should use for each token in context
         num_samples: the number of sequences to output for each input context
         length: The maximum length of generation in addition to the original sentence's length
         stop_token_ids: generation of each sequence will stop if we generate any of these tokens
@@ -120,18 +119,13 @@ def sample_sequence(model, length, context, position_ids, num_samples,
         c = min(copy, len(context[i])-1) # -1 so that we do not copy prompt_token
         padded_context.append(context[i] + context[i][:c] + ([pad_token_id] * (max_length-len(context[i])+copy-c)))
     
-    context = torch.tensor(padded_context, dtype=torch.long, device=device)
-    context = context.repeat(num_samples, 1)
     next_index = min_length + min(copy, min_length-1)
-    generated = context[:, :next_index]
-    should_finish = None
     length = max_length + (max_length - next_index) + length # generate till max_length, then generate another max_length+length tokens
     segment_ids = []
 
-    # should not change the elements of position_ids since it will change them outside this function as well.
     completed_position_ids = []
-    for i in range(len(position_ids)):
-        p = position_ids[i]
+    for i in range(len(context)):
+        p = list(range(len(context[i])))
         segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+next_index-len(p)))
         if start_reverse_position_ids is None:
             completed_position_ids.append(p + list(range(length + next_index - len(p))))
@@ -146,8 +140,12 @@ def sample_sequence(model, length, context, position_ids, num_samples,
     # print('context = ', context)
     # print('position_ids = ', position_ids)
     # print('segment_ids = ', segment_ids)
-    generated_logits = None
 
+    context = torch.tensor(padded_context, dtype=torch.long, device=device)
+    context = context.repeat(num_samples, 1)
+    generated = context[:, :next_index]
+    should_finish = None
+    generated_logits = None
     past = None
     next_token = None
     with torch.no_grad():
@@ -249,14 +247,14 @@ special_token_mapping = {
     'PHONE_NUMBER_1': {'forward': '777-8888'}
 }
 
-def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_token, skip_heuristics):
+def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, prompt_token, skip_heuristics):
     """
     Read a tsv file (this includes a text file with one example per line) and returns input features that the model needs
     """
 
+    all_contexts = []
     all_context_tokens = []
     all_context_lengths = []
-    all_position_ids = []
     all_golds = []
     reverse_maps = []
 
@@ -272,17 +270,17 @@ def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_colum
             else:
                 raw_text, reverse_map = input_heuristics(raw_text)
                 reverse_maps.append(reverse_map)
-            # print('after text = ', raw_text)
+            all_contexts.append(raw_text)
             raw_text += prompt_token
+            if prompt_column is not None and len(row) > prompt_column:
+                raw_text += row[prompt_column]
             context_tokens = tokenizer.encode(raw_text, add_special_tokens=False)
-            position_ids = [pos for pos in range(len(context_tokens))]
             all_context_tokens.append(context_tokens)
             all_context_lengths.append(len(context_tokens))
-            all_position_ids.append(position_ids)
             # if args.model_type == "ctrl":
                 # if not any(context_tokens[0] == x for x in tokenizer.control_codes.values()):
                     # logger.info("WARNING! You are not starting your generation from a control code so you won't get good results")
-    return all_context_tokens, all_context_lengths, all_position_ids, all_golds, reverse_maps
+    return all_contexts, all_context_tokens, all_context_lengths, all_golds, reverse_maps
 
 def input_heuristics(s: str):
     """
@@ -299,6 +297,7 @@ def input_heuristics(s: str):
     if s.startswith('which') or s.startswith('what') or s.startswith('where') or s.startswith('how') or s.startswith('who') or s.startswith('when'):
         if s.endswith('.'):
             s = s[:-1]
+        if s[-1] != '?':
             s += '?'
 
     # replace special tokens with natural-looking exmaples
@@ -323,6 +322,16 @@ def output_heuristics(s: str, reverse_map: list):
                 s = s.replace(b, special_token)
                 break
     return s
+
+def lower_case(string):
+    exceptions = [match.group(0) for match in re.finditer('[A-Z]+_[0-9]+', string)]
+    for e in exceptions:
+        string = string.replace(e, '<temp>', 1)
+    string = string.lower()
+    for e in exceptions:
+        string = string.replace('<temp>', e, 1)
+
+    return string
 
 def compute_metrics(generations, golds):
     """
@@ -368,17 +377,20 @@ def parse_argv(parser):
     parser.add_argument("--input_file", type=str, help="The file from which we read prompts.")
     parser.add_argument('--input_column', type=int, required=True,
                         help='The column in the input file which contains the input sentences.')
+    parser.add_argument('--prompt_column', type=int, default=None,
+                        help='The column in the input file which contains the text we should start generation from.')
     parser.add_argument('--gold_column', type=int, default=None,
                         help='The column in the input file which contains the gold sentences. Defaults to --input_column if no gold is available.')
     parser.add_argument("--output_file", type=str, help="When specified, generated text will be written in this file.")
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
     parser.add_argument("--length", type=int, default=20, help='The generated sentences will have a maximum length of len(input) + arg.length')
     parser.add_argument("--skip_heuristics", action='store_true', help='If True, will not replace special word such as NUMBER_0 in the input.')
+    parser.add_argument("--do_lower_case", action='store_true', help='If True, will convert the output to lowercase. Has no effect if the model is already uncased.')
     
     # These can be used for improving the quality of the output
     parser.add_argument("--num_samples", type=int, default=1)
-    parser.add_argument("--selection_criterion", type=str, choices=['none', 'average_logit', 'average_logprob'], default='none',
-                        help='Select one of --num_sample outputs based on this criterion')
+    parser.add_argument("--selection_criterion", type=str, choices=['none', 'average_logit', 'average_logprob', 'bleu'], default='none',
+                        help='Select one of --num_sample outputs that maximizes this criterion')
 
     # These are generation hyperparameters. Each one can be a list of values in which case, we generate num_samples outputs for each set of hyperparameters.
     parser.add_argument("--start_reverse_position_ids", type=int, nargs='+', default=[None],
@@ -404,6 +416,8 @@ def parse_argv(parser):
                         help="Batch size for text generation for each GPU.")
 
 def main(args):
+    if args.prompt_column is not None and args.copy is not None and args.copy[0] != 0:
+        raise ValueError('Cannot copy from the input and use prompt at the same time. Disable either --copy or --prompt_column.')
     hyperparameters = ['temperature', 'top_k', 'top_p', 'repetition_penalty', 'start_reverse_position_ids', 'copy']
     max_hyperparameter_len = max([len(getattr(args, h)) for h in hyperparameters])
     valid_len = [1, max_hyperparameter_len]
@@ -493,15 +507,15 @@ def run_generation(args):
     if pad_token_id is None:
         logger.error('Your tokenizer does not have a padding token')
 
-    all_context_tokens, all_context_lengths, all_position_ids, all_golds, reverse_maps = \
+    all_contexts, all_context_tokens, all_context_lengths, all_golds, reverse_maps = \
                                   create_features_from_tsv_file(file_path=args.input_file, tokenizer=tokenizer,
-                                  input_column=args.input_column, gold_column=args.gold_column,
+                                  input_column=args.input_column, gold_column=args.gold_column, prompt_column=args.prompt_column,
                                   prompt_token=args.prompt_token, skip_heuristics=args.skip_heuristics)
 
     
     # sort contexts based on their length so that less generated tokens are thrown away and generation can be done faster
-    t = list(zip(*sorted(list(zip(all_context_lengths, all_context_tokens, all_position_ids, range(len(all_context_tokens)), reverse_maps)), reverse=True)))
-    all_context_lengths, all_context_tokens, all_position_ids, original_order, reverse_maps = list(t[0]), list(t[1]), list(t[2]), list(t[3]), list(t[4])
+    t = list(zip(*sorted(list(zip(all_context_lengths, all_contexts, all_context_tokens, range(len(all_context_tokens)), reverse_maps)), reverse=True)))
+    all_context_lengths, all_contexts, all_context_tokens, original_order, reverse_maps = list(t[0]), list(t[1]), list(t[2]), list(t[3]), list(t[4])
     all_outputs = []
 
     if args.output_file is not None:
@@ -511,9 +525,9 @@ def run_generation(args):
 
     for batch in trange(math.ceil(len(all_context_tokens) / args.batch_size), desc="Batch"):
         batch_slice = (batch*args.batch_size, min((batch+1)*args.batch_size, len(all_context_tokens)))
+        batch_contexts = all_contexts[batch_slice[0]: batch_slice[1]]
         batch_context_tokens = all_context_tokens[batch_slice[0]: batch_slice[1]]
         batch_context_lengths = all_context_lengths[batch_slice[0]: batch_slice[1]]
-        batch_position_ids = all_position_ids[batch_slice[0]: batch_slice[1]]
         batch_reverse_maps = reverse_maps[batch_slice[0]: batch_slice[1]]
 
         batch_outputs = [[] for _ in range(batch_slice[1]-batch_slice[0])]
@@ -522,7 +536,6 @@ def run_generation(args):
             out, out_logits = sample_sequence(
                 model=model,
                 context=batch_context_tokens,
-                position_ids=batch_position_ids,
                 num_samples=args.num_samples,
                 length=args.length,
                 temperature=args.temperature[hyperparameter_idx],
@@ -550,7 +563,7 @@ def run_generation(args):
                 o_logits = out_logits[i]
                 o = o[batch_context_lengths[i % (batch_slice[1]-batch_slice[0])]:]
                 # print('original tokens: ', batch_context_tokens[i % (batch_slice[1]-batch_slice[0])])
-                # print('original text: ', tokenizer.decode(batch_context_tokens[i % (batch_slice[1]-batch_slice[0])], clean_up_tokenization_spaces=True, skip_special_tokens=False))
+                # print('original text: ', batch_contexts[i % (batch_slice[1]-batch_slice[0])])
 
                 if args.stop_tokens is not None:
                     min_index = len(o)
@@ -567,11 +580,6 @@ def run_generation(args):
                     o = o[:min_index]
                 
                 text = tokenizer.decode(o, clean_up_tokenization_spaces=True, skip_special_tokens=False)
-                batch_criterion[i % (batch_slice[1]-batch_slice[0])].append(np.mean(o_logits))
-                # print('generated tokens: ', o)
-                # print('generated token cirterion: ', np.mean(o_logits))
-                # print('text = ', text)
-                # print('-'*10)
 
                 # assert tokenizer.pad_token not in text
                 text = text.replace(tokenizer.pad_token, '')
@@ -579,16 +587,28 @@ def run_generation(args):
                 text = text.strip()
                 if not args.skip_heuristics:
                     text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
+                if args.do_lower_case:
+                    text = lower_case(text)
                 batch_outputs[i % (batch_slice[1]-batch_slice[0])].append(text)
+
+                if args.selection_criterion == 'bleu':
+                    criterion = computeBLEU([text], [[batch_contexts[i % (batch_slice[1]-batch_slice[0])]]])
+                else:
+                    criterion = np.mean(o_logits)
+                batch_criterion[i % (batch_slice[1]-batch_slice[0])].append(criterion)
+                print('generated tokens: ', o)
+                print('generated cirterion: %.2f' % criterion)
+                print('text = ', text)
+                # print('-'*10)
 
 
         if args.selection_criterion == 'none':
             all_outputs.extend(batch_outputs)
         else:
             for idx, example in enumerate(batch_outputs):
-                print('original text: ', tokenizer.decode(batch_context_tokens[idx % (batch_slice[1]-batch_slice[0])], clean_up_tokenization_spaces=True, skip_special_tokens=False))
+                print('original text: ', batch_contexts[idx % (batch_slice[1]-batch_slice[0])])
                 print(example)
-                print(np.exp(batch_criterion[idx]))
+                print(batch_criterion[idx])
                 print('-'*10)
                 selection = example[np.argmax(batch_criterion[idx])]
                 all_outputs.append([selection])
