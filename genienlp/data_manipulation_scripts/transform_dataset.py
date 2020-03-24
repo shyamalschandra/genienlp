@@ -93,24 +93,9 @@ def main():
                 gold_thingtalk_count += 1
             elif args.transformation == 'get_wrong_thingtalk':
                 if row[2] != gold_thingtalks[gold_thingtalk_count]:
-                    if args.remove_with_heuristics:
-                        _, new_quote_values = remove_thingtalk_quotes(row[2])
-                        _, gold_quote_values = remove_thingtalk_quotes(gold_thingtalks[gold_thingtalk_count])
-                        if new_quote_values != gold_quote_values:
-                            output_rows = []
-                            heuristic_count += 1
-                        else:
-                            if args.replace_with_gold:
-                                row[2] = gold_thingtalks[gold_thingtalk_count]
-                            if set(re.findall('[A-Z]+_[0-9]', row[1])) != set(re.findall('[A-Z]+_[0-9]', row[2])):
-                                output_rows = []
-                                heuristic_count += 1
-                            else:
-                                output_rows = [row]
-                    else:
-                        if args.replace_with_gold:
-                            row[2] = gold_thingtalks[gold_thingtalk_count]
-                        output_rows = [row]
+                    if args.replace_with_gold:
+                        row[2] = gold_thingtalks[gold_thingtalk_count]
+                    output_rows = [row]
                 else:
                     output_rows = []
                 gold_thingtalk_count += 1
@@ -136,6 +121,15 @@ def main():
             
             for o in output_rows:
                 output_row = ""
+                if args.remove_with_heuristics:
+                    if set(re.findall('[A-Z]+_[0-9]', o[args.utterance_column])) != set(re.findall('[A-Z]+_[0-9]', o[args.thingtalk_column])):
+                        heuristic_count += 1
+                        continue
+                    _, quote_values = remove_thingtalk_quotes(o[args.thingtalk_column])
+                    for q in quote_values:
+                        if q not in o[args.utterance_column]:
+                            heuristic_count += 1
+                            continue
                 if args.remove_duplicates:
                     normalized_utterance = re.sub('\s+', '', o[args.utterance_column])
                     if normalized_utterance in seen_natural_utterances:

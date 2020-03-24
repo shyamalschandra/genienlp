@@ -69,7 +69,7 @@ def main():
                 second = remove_quotation(detokenize(second))
             writer.writerow([first.strip(), second.strip()])
             output_size += 1
-            if drop_count >= args.max_output_size:
+            if output_size >= args.max_output_size:
                 break
     print('Dropped', drop_count, 'examples')
 
