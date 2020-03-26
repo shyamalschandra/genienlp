@@ -86,23 +86,22 @@ class SpecialTokenMap:
         else:
             list_of_strings_to_match = sorted(self.backward_func(parameter), key=lambda x:len(x), reverse=True)
         # print('list_of_strings_to_match = ', list_of_strings_to_match)
-        for l in list_of_strings_to_match:
-            if ' '+l+' ' in s:
-                s = s.replace(' '+l+' ', ' '+occurance+' ')
+        for string_to_match in list_of_strings_to_match:
+            l = [' '+string_to_match+' ', string_to_match+' ', ' '+string_to_match]
+            o = [' '+occurance+' ', occurance+' ', ' '+occurance]
+            for i in range(len(l)):
+                new_s = re.sub(l[i], o[i], flags=re.IGNORECASE)
+            if s != new_s:
+                s = new_s
                 break
-            if ' '+l in s:
-                s = s.replace(' '+l, ' '+occurance)
-                break
-            if l+' ' in s:
-                s = s.replace(l+' ', occurance+' ')
-                break
+            
         return s
 
 
 def tokenizer(s):
     return s.split()
 
-def detokenize(text):
+def detokenize(text: str):
     tokens = ["'d", "n't", "'ve", "'m", "'re", "'ll", ".", ",", "?", "!", "'s", ")"]
     for t in tokens:
         text = text.replace(' ' + t, t)
@@ -110,6 +109,16 @@ def detokenize(text):
     text = text.replace('gon na', 'gonna')
     text = text.replace('wan na', 'wanna')
     return text
+
+def tokenize(text: str):
+    tokens = ["'d", "n't", "'ve", "'m", "'re", "'ll", ".", ",", "?", "!", "'s", ")"]
+    for t in tokens:
+        text = text.replace(t, ' ' + t)
+    text = text.replace("(", "( ")
+    text = text.replace('gonna', 'gon na')
+    text = text.replace('wanna', 'wan na')
+    return text
+
 
 def get_number_of_lines(file_path):
     count = 0

@@ -48,7 +48,7 @@ from transformers import CTRLLMHeadModel, CTRLTokenizer
 from transformers import XLMWithLMHeadModel, XLMTokenizer
 from transformers import BertForMaskedLM, BertTokenizer
 
-from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, \
+from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, tokenize, \
                     top_k_top_p_filtering, SpecialTokenMap
 from .metrics import computeBLEU
 
@@ -230,8 +230,8 @@ special_pattern_mapping = [
     SpecialTokenMap('PHONE_NUMBER_([0-9]+)', ['888-8888', '777-8888']),
     SpecialTokenMap('NUMBER_([0-9]+)', ['2', '3'], [['2', 'two'], ['3', 'three']]),
     SpecialTokenMap('PATH_NAME_([0-9]+)', ['my1folder', 'my2folder']),
-    SpecialTokenMap('TIME_([0-9]+)', ['1p.m.', '2p.m.'], [['1 pm', '1pm', '1:00 pm', '1:00pm', '1p.m.', '1 p.m.', '1:00 p.m.', '1:00'],
-                                                            ['2 pm', '2pm', '2:00 pm', '2:00pm', '2p.m.', '2 p.m.', '2:00 p.m.', '2:00']]),
+    SpecialTokenMap('TIME_([0-9]+)', ['1p.m.', '2p.m.'], [['1 pm', '1pm', '1:00 pm', '1:00pm', '1p.m.', '1 p.m.', '1:00 p.m.', '1:00', 'one o\'clock'],
+                                                            ['2 pm', '2pm', '2:00 pm', '2:00pm', '2p.m.', '2 p.m.', '2:00 p.m.', '2:00', 'two o\'clock']]),
     SpecialTokenMap('EMAIL_ADDRESS_([0-9]+)', ['e1@example.com', 'e2@example.com']),
     SpecialTokenMap('URL_([0-9]+)', ['my1site.com', 'my2site.com']),
     SpecialTokenMap('DATE_([0-9]+)', ['5-6-2015', '8-3-2016']),
@@ -289,7 +289,7 @@ def input_heuristics(s: str):
     s = detokenize(s)
 
     # Put question mark at the end whenever necessary.
-    if s.startswith('which') or s.startswith('what') or s.startswith('where') or s.startswith('how') or s.startswith('who') or s.startswith('when'):
+    if s.split()[0].lower() in ['which', 'what', 'where', 'how', 'who', 'when', 'is', 'are']:
         if s.endswith('.'):
             s = s[:-1]
         if s[-1] != '?':
@@ -306,7 +306,8 @@ def input_heuristics(s: str):
 def output_heuristics(s: str, reverse_map: list):
     for spm, occurance in reverse_map:
         s = spm.backward(s, occurance)
-        
+
+    s = tokenize(s)
     return s
 
 def lower_case(string):
