@@ -117,22 +117,23 @@ def sample_sequence(model, length, context, num_samples,
     padded_context = []
     for i in range(len(context)):
         c = min(copy, len(context[i])-1) # -1 so that we do not copy prompt_token
-        padded_context.append(context[i] + context[i][:c] + ([pad_token_id] * (max_length-len(context[i])+copy-c)))
+        padded_context.append(context[i] + context[i][:c] + ([pad_token_id] * (max_length-len(context[i])+copy-c))) # pad to (max_length + copy)
     
     next_index = min_length + min(copy, min_length-1)
     length = max_length + (max_length - next_index) + length # generate till max_length, then generate another max_length+length tokens
     segment_ids = []
 
-    completed_position_ids = []
+    position_ids = []
     for i in range(len(context)):
-        p = list(range(len(context[i])))
-        segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length+next_index-len(p)))
+        prompt_token_position = context[i].index(prompt_token_id)
+        p = list(range(prompt_token_position+1))
+        segment_ids.append([segment_token_ids[0]]*len(p) + [segment_token_ids[1]]*(length + next_index - len(p)))
         if start_reverse_position_ids is None:
-            completed_position_ids.append(p + list(range(length + next_index - len(p))))
+            position_ids.append(p + list(range(length + next_index - len(p))))
         else:
-            completed_position_ids.append(p + list(reversed(range(start_reverse_position_ids+len(p)))) + [0]*(length + next_index-start_reverse_position_ids-2*len(p)))
+            position_ids.append(p + list(reversed(range(start_reverse_position_ids+len(p)))) + [0]*(length + next_index-start_reverse_position_ids-2*len(p)))
 
-    position_ids = torch.tensor(completed_position_ids, dtype=torch.long, device=device)
+    position_ids = torch.tensor(position_ids, dtype=torch.long, device=device)
     position_ids = position_ids.repeat(num_samples, 1)
     segment_ids = torch.tensor(segment_ids, dtype=torch.long, device=device)
     segment_ids = segment_ids.repeat(num_samples, 1)
@@ -561,6 +562,7 @@ def run_generation(args):
             out_logits = out_logits[:, :].tolist()
             for i, o in enumerate(out):
                 o_logits = out_logits[i]
+                # print('all output tokens: ', o)
                 o = o[batch_context_lengths[i % (batch_slice[1]-batch_slice[0])]:]
                 # print('original tokens: ', batch_context_tokens[i % (batch_slice[1]-batch_slice[0])])
                 # print('original text: ', batch_contexts[i % (batch_slice[1]-batch_slice[0])])
@@ -596,9 +598,10 @@ def run_generation(args):
                 else:
                     criterion = np.mean(o_logits)
                 batch_criterion[i % (batch_slice[1]-batch_slice[0])].append(criterion)
-                print('generated tokens: ', o)
-                print('generated cirterion: %.2f' % criterion)
-                print('text = ', text)
+                # print('generated tokens: ', o)
+                # print('o_logits = ', o_logits)
+                # print('generated cirterion: %.2f' % criterion)
+                # print('text = ', text)
                 # print('-'*10)
 
 
