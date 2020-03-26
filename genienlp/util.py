@@ -34,7 +34,7 @@ import logging
 import os
 import random
 import time
-
+import re
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -45,11 +45,65 @@ from .data_utils.iterator import Iterator
 logger = logging.getLogger(__name__)
 
 
+class SpecialTokenMap:
+    def __init__(self, pattern, forward_func, backward_func=None):
+        """
+        Inputs:
+            pattern: a regex pattern
+            forward_func: a function with signature forward_func(str) -> str
+            backward_func: a function with signature backward_func(str) -> list[str]
+        """
+        if isinstance(forward_func, list):
+            self.forward_func = lambda x: forward_func[int(x)]
+        else:
+            self.forward_func = forward_func
+
+        if isinstance(forward_func, list) and backward_func is not None:
+            self.backward_func = lambda x: backward_func[int(x)]
+        else:
+            self.backward_func = backward_func
+    
+        self.pattern = pattern
+    
+    def forwad(self, s: str):
+        reverse_map = []
+        matches = re.finditer(self.pattern, s)
+        if matches is None:
+            return s, reverse_map
+        for match in matches:
+            occurance = match.group(0)
+            parameter = match.group(1)
+            replacement = self.forward_func(parameter)
+            s = s.replace(occurance, replacement)
+            reverse_map.append((self, occurance))
+        return s, reverse_map
+
+    def backward(self, s: str, occurance: str):
+        match = re.match(self.pattern, occurance)
+        parameter = match.group(1)
+        if self.backward_func is None:
+            list_of_strings_to_match = [self.forward_func(parameter)]
+        else:
+            list_of_strings_to_match = sorted(self.backward_func(parameter), key=lambda x:len(x), reverse=True)
+        # print('list_of_strings_to_match = ', list_of_strings_to_match)
+        for l in list_of_strings_to_match:
+            if ' '+l+' ' in s:
+                s = s.replace(' '+l+' ', ' '+occurance+' ')
+                break
+            if ' '+l in s:
+                s = s.replace(' '+l, ' '+occurance)
+                break
+            if l+' ' in s:
+                s = s.replace(l+' ', occurance+' ')
+                break
+        return s
+
+
 def tokenizer(s):
     return s.split()
 
 def detokenize(text):
-    tokens = ["'d", "n't", "'ve", "'m", "'re", "'ll", ".", ",", "?", "'s", ")"]
+    tokens = ["'d", "n't", "'ve", "'m", "'re", "'ll", ".", ",", "?", "!", "'s", ")"]
     for t in tokens:
         text = text.replace(' ' + t, t)
     text = text.replace("( ", "(")

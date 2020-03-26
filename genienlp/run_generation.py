@@ -48,7 +48,8 @@ from transformers import CTRLLMHeadModel, CTRLTokenizer
 from transformers import XLMWithLMHeadModel, XLMTokenizer
 from transformers import BertForMaskedLM, BertTokenizer
 
-from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, top_k_top_p_filtering
+from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, \
+                    top_k_top_p_filtering, SpecialTokenMap
 from .metrics import computeBLEU
 
 
@@ -225,28 +226,21 @@ def sample_sequence(model, length, context, num_samples,
     return generated, generated_logits
 
 
-special_token_mapping = {
-    'PATH_NAME_0': {'forward': 'my1folder'},
-    'PATH_NAME_1': {'forward': 'my2folder'},
-    'TIME_0': {'forward': '1p.m.', 'back': ['1 pm', '1pm', '1:00 pm', '1:00pm', '1p.m.', '1 p.m.', '1:00 p.m.', '1:00']},
-    'TIME_1': {'forward': '2p.m.', 'back': ['2 pm', '2pm', '2:00 pm', '2:00pm', '2p.m.', '2 p.m.', '2:00 p.m.', '2:00']},
-    'EMAIL_ADDRESS_0': {'forward': 'e1@example.com'},
-    'EMAIL_ADDRESS_1': {'forward': 'e2@example.com'},
-    'URL_0': {'forward': 'my1site.com'},
-    'URL_1': {'forward': 'my2site.com'},
-    'DATE_0': {'forward': '5-6-2015', 'back': ['5-6-2015']},
-    'DATE_1': {'forward': '8-3-2016', 'back': ['8-3-2016']},
-    'CURRENCY_0': {'forward': '$12', 'back': ['$12', 'twelve dollars', '12 dollars', '$ 12', '$ 12.00', '12.00', '12']},
-    'CURRENCY_1': {'forward': '$13', 'back': ['$13', 'thirteen dollars', '13 dollars', '$ 13', '$ 13.00', '13.00', '13']},
-    'NUMBER_0': {'forward': '2', 'back': ['2', 'two']},
-    'NUMBER_1': {'forward': '3', 'back': ['3', 'three']},
-    'DURATION_0': {'forward': '5 weeks', 'back': ['5 weeks', 'five weeks']},
-    'DURATION_1': {'forward': '6 weeks', 'back': ['6 weeks', 'six weeks']},
-    'LOCATION_0': {'forward': 'locatio1n', 'back': ['locatio1n', 'locat1n']},
-    'LOCATION_1': {'forward': 'locatio2n', 'back': ['locatio2n', 'locat2n']},
-    'PHONE_NUMBER_0': {'forward': '888-8888'},
-    'PHONE_NUMBER_1': {'forward': '777-8888'}
-}
+special_pattern_mapping = [
+    SpecialTokenMap('PHONE_NUMBER_([0-9]+)', ['888-8888', '777-8888']),
+    SpecialTokenMap('NUMBER_([0-9]+)', ['2', '3'], [['2', 'two'], ['3', 'three']]),
+    SpecialTokenMap('PATH_NAME_([0-9]+)', ['my1folder', 'my2folder']),
+    SpecialTokenMap('TIME_([0-9]+)', ['1p.m.', '2p.m.'], [['1 pm', '1pm', '1:00 pm', '1:00pm', '1p.m.', '1 p.m.', '1:00 p.m.', '1:00'],
+                                                            ['2 pm', '2pm', '2:00 pm', '2:00pm', '2p.m.', '2 p.m.', '2:00 p.m.', '2:00']]),
+    SpecialTokenMap('EMAIL_ADDRESS_([0-9]+)', ['e1@example.com', 'e2@example.com']),
+    SpecialTokenMap('URL_([0-9]+)', ['my1site.com', 'my2site.com']),
+    SpecialTokenMap('DATE_([0-9]+)', ['5-6-2015', '8-3-2016']),
+    SpecialTokenMap('CURRENCY_([0-9]+)', ['$12', '$13'], [['$12', 'twelve dollars', '12 dollars', '$ 12', '$ 12.00', '12.00', '12'], 
+                                                          ['$13', 'thirteen dollars', '13 dollars', '$ 13', '$ 13.00', '13.00', '13']]),
+    SpecialTokenMap('DURATION_([0-9]+)', ['5 weeks', '6 weeks'], [['5 weeks', 'five weeks'], ['6 weeks', 'six weeks']]),
+    SpecialTokenMap('LOCATION_([0-9]+)', ['locatio1n', 'locatio2n'], [['locatio1n', 'locat1n'], ['locatio2n', 'locat2n']]),
+    SpecialTokenMap('QUOTED_STRING_([0-9]+)', lambda x: 'Chinese', lambda x: ['Chinese', 'chinese']) # TODO change to be more general than cuisine
+]
 
 def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, prompt_token, skip_heuristics):
     """
@@ -302,26 +296,17 @@ def input_heuristics(s: str):
             s += '?'
 
     # replace special tokens with natural-looking exmaples
-    sorted_special_token_mapping = sorted(special_token_mapping.items(), key=lambda x:len(x[0]), reverse=True) # sort to alwways start matching from the longest string
-    for special_token, natural_form in sorted_special_token_mapping:
-        new_s = s.replace(special_token, natural_form['forward'])
-        if new_s != s:
-            # print(new_s)
-            reverse_map.append(special_token)
-        s = new_s
+    reverse_map = []
+    for spm in special_pattern_mapping:
+        s, r = spm.forwad(s)
+        reverse_map.extend(r)
+
     return s, reverse_map
 
 def output_heuristics(s: str, reverse_map: list):
-    for special_token in reverse_map:
-        if 'back' in special_token_mapping[special_token]:
-            back = special_token_mapping[special_token]['back']
-        else:
-            back = [special_token_mapping[special_token]['forward']]
-        back = sorted(back, key=lambda x:len(x), reverse=True)
-        for b in back:
-            if b in s:
-                s = s.replace(b, special_token)
-                break
+    for spm, occurance in reverse_map:
+        s = spm.backward(s, occurance)
+        
     return s
 
 def lower_case(string):
