@@ -3,6 +3,8 @@ import csv
 from tqdm import tqdm
 import re
 
+from genienlp.util import tokenize, lower_case
+
 def remove_thingtalk_quotes(thingtalk):
     quote_values = []
     while True:
@@ -67,7 +69,7 @@ def main():
             new_queries = []
             query_file = open(args.query_file, 'r')
             for q in query_file:
-                new_queries.append(q.strip())
+                new_queries.append(lower_case(tokenize(q.strip())))
             new_query_count = 0
         if args.transformation in ['remove_wrong_thingtalk', 'get_wrong_thingtalk']:
             gold_thingtalks = []
@@ -126,10 +128,14 @@ def main():
                         heuristic_count += 1
                         continue
                     _, quote_values = remove_thingtalk_quotes(o[args.thingtalk_column])
+                    should_skip = False
                     for q in quote_values:
                         if q not in o[args.utterance_column]:
                             heuristic_count += 1
-                            continue
+                            should_skip = True
+                            break
+                    if should_skip:
+                        continue
                 if args.remove_duplicates:
                     normalized_utterance = re.sub('\s+', '', o[args.utterance_column])
                     if normalized_utterance in seen_natural_utterances:

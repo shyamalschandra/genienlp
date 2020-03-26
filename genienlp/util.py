@@ -119,6 +119,15 @@ def tokenize(text: str):
     text = text.replace('wanna', 'wan na')
     return text
 
+def lower_case(string):
+    exceptions = [match.group(0) for match in re.finditer('[A-Z]+_[0-9]+', string)]
+    for e in exceptions:
+        string = string.replace(e, '<temp>', 1)
+    string = string.lower()
+    for e in exceptions:
+        string = string.replace('<temp>', e, 1)
+
+    return string
 
 def get_number_of_lines(file_path):
     count = 0

@@ -48,7 +48,7 @@ from transformers import CTRLLMHeadModel, CTRLTokenizer
 from transformers import XLMWithLMHeadModel, XLMTokenizer
 from transformers import BertForMaskedLM, BertTokenizer
 
-from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, tokenize, \
+from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, tokenize, lower_case, \
                     top_k_top_p_filtering, SpecialTokenMap
 from .metrics import computeBLEU
 
@@ -310,15 +310,6 @@ def output_heuristics(s: str, reverse_map: list):
     s = tokenize(s)
     return s
 
-def lower_case(string):
-    exceptions = [match.group(0) for match in re.finditer('[A-Z]+_[0-9]+', string)]
-    for e in exceptions:
-        string = string.replace(e, '<temp>', 1)
-    string = string.lower()
-    for e in exceptions:
-        string = string.replace('<temp>', e, 1)
-
-    return string
 
 def compute_metrics(generations, golds):
     """
