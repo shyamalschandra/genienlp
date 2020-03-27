@@ -90,7 +90,7 @@ class SpecialTokenMap:
             l = [' '+string_to_match+' ', string_to_match+' ', ' '+string_to_match]
             o = [' '+occurance+' ', occurance+' ', ' '+occurance]
             for i in range(len(l)):
-                new_s = re.sub(l[i], o[i], flags=re.IGNORECASE)
+                new_s = re.sub(l[i], o[i], s, flags=re.IGNORECASE)
             if s != new_s:
                 s = new_s
                 break

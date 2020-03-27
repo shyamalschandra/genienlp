@@ -77,6 +77,8 @@ def apply_repetition_penalty(logits, context, repetition_penalty, prompt_token_i
     """ repetition penalty from CTRL (https://arxiv.org/abs/1909.05858), but much faster on GPU
         we penalize only the tokens that appear in the context, not in the generated text
     """
+    if repetition_penalty == 1.0:
+        return logits
     m = torch.scatter(input=torch.zeros_like(logits), dim=1, index=context, value=1)
     m[:prompt_token_id] = 0
     m[:pad_token_id] = 0
@@ -96,7 +98,7 @@ def apply_repetition_penalty(logits, context, repetition_penalty, prompt_token_i
                     # logits[i, _] *= repetition_penalty
     return logits
 
-def sample_sequence(model, length, context, num_samples,
+def sample_sequence(model, length, min_output_length, context, num_samples,
                     temperature=1.0, top_k=0, top_p=1.0, copy=0, repetition_penalty=1.0,
                     is_xlnet=False, is_xlm_mlm=False, xlm_mask_token=None, xlm_lang=None, device='cpu',
                     stop_token_ids=None, pad_token_id=None, supports_past=False, prompt_token_id=None, segment_token_ids=None,
@@ -146,6 +148,7 @@ def sample_sequence(model, length, context, num_samples,
     context = torch.tensor(padded_context, dtype=torch.long, device=device)
     context = context.repeat(num_samples, 1)
     generated = context[:, :next_index]
+    generated_length = torch.zeros((context.shape[0], 1), dtype=torch.long, device=device)
     should_finish = None
     generated_logits = None
     past = None
@@ -191,6 +194,16 @@ def sample_sequence(model, length, context, num_samples,
                                                          prompt_token_id=prompt_token_id, pad_token_id=pad_token_id)
             filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
 
+            if next_index < context.shape[1]:
+                m = (context[:, next_index:next_index+1] != pad_token_id).long() # m==0 is where next_token should be kept
+            else:
+                m = torch.zeros(1, device=device)
+
+            # prevent stop_tokens if generated_length < min_output_length
+            should_remove_stop_tokens = (generated_length < min_output_length)
+            filtered_logits[:, stop_token_ids] = filtered_logits[:, stop_token_ids].masked_fill(should_remove_stop_tokens, -float('Inf'))
+            generated_length = generated_length + (1-m)
+
             if temperature == 0: # greedy sampling:
                 next_token = torch.argmax(filtered_logits, dim=-1).unsqueeze(-1)
             else:
@@ -204,11 +217,8 @@ def sample_sequence(model, length, context, num_samples,
 
             # throw away the tokens that we already have from the context
             if next_index < context.shape[1]:
-                m = (context[:, next_index:next_index+1] != pad_token_id).long() # m==0 is where next_token should be kept
-                next_token = m*context[:, next_index:next_index+1]+(1-m)*next_token
-                generated_token_logit = (1-m)*generated_token_logit
-            else:
-                m = torch.zeros(1, device=device)
+                next_token = m*context[:, next_index:next_index+1] + (1-m)*next_token
+            generated_token_logit = (1-m)*generated_token_logit
 
             for stop_token_id in stop_token_ids:
                 if should_finish is None:
@@ -239,7 +249,8 @@ special_pattern_mapping = [
                                                           ['$13', 'thirteen dollars', '13 dollars', '$ 13', '$ 13.00', '13.00', '13']]),
     SpecialTokenMap('DURATION_([0-9]+)', ['5 weeks', '6 weeks'], [['5 weeks', 'five weeks'], ['6 weeks', 'six weeks']]),
     SpecialTokenMap('LOCATION_([0-9]+)', ['locatio1n', 'locatio2n'], [['locatio1n', 'locat1n'], ['locatio2n', 'locat2n']]),
-    SpecialTokenMap('QUOTED_STRING_([0-9]+)', lambda x: 'Chinese', lambda x: ['Chinese', 'chinese']) # TODO change to be more general than cuisine
+    SpecialTokenMap('QUOTED_STRING_([0-9]+)', lambda x: 'Chinese', lambda x: ['Chinese', 'chinese']), # TODO change to be more general than cuisine
+    SpecialTokenMap('GENERIC_ENTITY_uk.ac.cam.multiwoz.Restaurant:Restaurant_([0-9]+)', lambda x: 'McDonald\'s', lambda x: ['McDonald\'s', 'Mc Donald\'s', 'McDonald', 'Mc Donald'])
 ]
 
 def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, prompt_token, skip_heuristics):
@@ -362,6 +373,7 @@ def parse_argv(parser):
     parser.add_argument("--output_file", type=str, help="When specified, generated text will be written in this file.")
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
     parser.add_argument("--length", type=int, default=20, help='The generated sentences will have a maximum length of len(input) + arg.length')
+    parser.add_argument("--min_output_length", type=int, default=1, help='Will prevent stop tokens from appearing in the first --min_length tokens of the generated sentences.')
     parser.add_argument("--skip_heuristics", action='store_true', help='If True, will not replace special word such as NUMBER_0 in the input.')
     parser.add_argument("--do_lower_case", action='store_true', help='If True, will convert the output to lowercase. Has no effect if the model is already uncased.')
     
@@ -516,6 +528,7 @@ def run_generation(args):
                 context=batch_context_tokens,
                 num_samples=args.num_samples,
                 length=args.length,
+                min_output_length=args.min_output_length,
                 temperature=args.temperature[hyperparameter_idx],
                 top_k=args.top_k[hyperparameter_idx],
                 top_p=args.top_p[hyperparameter_idx],
@@ -554,8 +567,10 @@ def run_generation(args):
                             pass
                     if min_index < len(o) and o[min_index] == tokenizer.convert_tokens_to_ids('?'):
                         # always include the question mark
-                        min_index = min_index+1
-                    o_logits = o_logits[:len(o_logits)-(len(o)-min_index)]
+                        min_index = min_index + 1
+                    if min_index < len(o) and o[min_index] == tokenizer.convert_tokens_to_ids(args.stop_tokens[0]):
+                        # include </paraphrase> in logit calculation
+                        o_logits = o_logits[:len(o_logits)-(len(o)-min_index-1)]
                     o = o[:min_index]
                 
                 text = tokenizer.decode(o, clean_up_tokenization_spaces=True, skip_special_tokens=False)

@@ -26,7 +26,7 @@ def remove_thingtalk_quotes(thingtalk):
 def main():
     parser = ArgumentParser()
     parser.add_argument('input', type=str,
-                        help='The path to the input.')
+                        help='The path to the input file.')
     parser.add_argument('output', type=str,
                         help='The path to the output file.')
     parser.add_argument('--query_file', type=str,
