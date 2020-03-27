@@ -117,7 +117,8 @@ def tokenize(text: str):
     text = text.replace("(", "( ")
     text = text.replace('gonna', 'gon na')
     text = text.replace('wanna', 'wan na')
-    return text
+    text = re.sub('\s+', ' ', text)
+    return text.strip()
 
 def lower_case(string):
     exceptions = [match.group(0) for match in re.finditer('[A-Z]+_[0-9]+', string)]
