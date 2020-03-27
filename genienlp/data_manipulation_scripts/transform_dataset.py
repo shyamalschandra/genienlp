@@ -128,6 +128,9 @@ def main():
                         heuristic_count += 1
                         continue
                     _, quote_values = remove_thingtalk_quotes(o[args.thingtalk_column])
+                    if quote_values is None:
+                        heuristic_count += 1
+                        continue
                     should_skip = False
                     for q in quote_values:
                         if q not in o[args.utterance_column]:
