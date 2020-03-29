@@ -54,12 +54,12 @@ class SpecialTokenMap:
             backward_func: a function with signature backward_func(str) -> list[str]
         """
         if isinstance(forward_func, list):
-            self.forward_func = lambda x: forward_func[int(x)]
+            self.forward_func = lambda x: forward_func[int(x)%len(forward_func)]
         else:
             self.forward_func = forward_func
 
-        if isinstance(forward_func, list) and backward_func is not None:
-            self.backward_func = lambda x: backward_func[int(x)]
+        if isinstance(backward_func, list):
+            self.backward_func = lambda x: backward_func[int(x)%len(backward_func)]
         else:
             self.backward_func = backward_func
     
@@ -72,6 +72,7 @@ class SpecialTokenMap:
             return s, reverse_map
         for match in matches:
             occurance = match.group(0)
+            # print('occurance = ', occurance)
             parameter = match.group(1)
             replacement = self.forward_func(parameter)
             s = s.replace(occurance, replacement)
@@ -121,7 +122,7 @@ def tokenize(text: str):
     return text.strip()
 
 def lower_case(string):
-    exceptions = [match.group(0) for match in re.finditer('[A-Z]+_[0-9]+', string)]
+    exceptions = [match.group(0) for match in re.finditer('[A-Za-z:_.]+_[0-9]+', string)]
     for e in exceptions:
         string = string.replace(e, '<temp>', 1)
     string = string.lower()
@@ -130,6 +131,23 @@ def lower_case(string):
 
     return string
 
+def remove_thingtalk_quotes(thingtalk):
+    quote_values = []
+    while True:
+        # print('before: ', thingtalk)
+        l1 = thingtalk.find('"')
+        if l1 < 0:
+            break
+        l2 = thingtalk.find('"', l1+1)
+        if l2 < 0:
+            # ThingTalk code is not syntactic
+            return thingtalk, None
+        quote_values.append(thingtalk[l1+1: l2].strip())
+        thingtalk = thingtalk[:l1] + '<temp>' + thingtalk[l2+1:]
+        # print('after: ', thingtalk)
+    thingtalk = thingtalk.replace('<temp>', '""')
+    return thingtalk, quote_values
+    
 def get_number_of_lines(file_path):
     count = 0
     with open(file_path) as f:

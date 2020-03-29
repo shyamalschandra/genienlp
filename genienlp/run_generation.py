@@ -49,7 +49,7 @@ from transformers import XLMWithLMHeadModel, XLMTokenizer
 from transformers import BertForMaskedLM, BertTokenizer
 
 from .util import set_seed, get_number_of_lines, combine_files_on_disk, split_file_on_disk, get_file_part_path, detokenize, tokenize, lower_case, \
-                    top_k_top_p_filtering, SpecialTokenMap
+                    top_k_top_p_filtering, SpecialTokenMap, remove_thingtalk_quotes
 from .metrics import computeBLEU
 
 
@@ -192,7 +192,6 @@ def sample_sequence(model, length, min_output_length, context, num_samples,
 
             next_token_logits = apply_repetition_penalty(next_token_logits, context, repetition_penalty,
                                                          prompt_token_id=prompt_token_id, pad_token_id=pad_token_id)
-            filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
 
             if next_index < context.shape[1]:
                 m = (context[:, next_index:next_index+1] != pad_token_id).long() # m==0 is where next_token should be kept
@@ -201,8 +200,11 @@ def sample_sequence(model, length, min_output_length, context, num_samples,
 
             # prevent stop_tokens if generated_length < min_output_length
             should_remove_stop_tokens = (generated_length < min_output_length)
-            filtered_logits[:, stop_token_ids] = filtered_logits[:, stop_token_ids].masked_fill(should_remove_stop_tokens, -float('Inf'))
+            next_token_logits[:, stop_token_ids] = next_token_logits[:, stop_token_ids].masked_fill(should_remove_stop_tokens, -float('Inf'))
+            # print('after ', next_token_logits[:, stop_token_ids])
             generated_length = generated_length + (1-m)
+
+            filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=top_k, top_p=top_p)
 
             if temperature == 0: # greedy sampling:
                 next_token = torch.argmax(filtered_logits, dim=-1).unsqueeze(-1)
@@ -253,7 +255,7 @@ special_pattern_mapping = [
     SpecialTokenMap('GENERIC_ENTITY_uk.ac.cam.multiwoz.Restaurant:Restaurant_([0-9]+)', lambda x: 'McDonald\'s', lambda x: ['McDonald\'s', 'Mc Donald\'s', 'McDonald', 'Mc Donald'])
 ]
 
-def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, prompt_token, skip_heuristics):
+def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, thingtalk_column, prompt_token, skip_heuristics):
     """
     Read a tsv file (this includes a text file with one example per line) and returns input features that the model needs
     """
@@ -274,7 +276,8 @@ def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_colum
             if skip_heuristics:
                 reverse_maps.append({})
             else:
-                raw_text, reverse_map = input_heuristics(raw_text)
+                thingtalk = row[thingtalk_column] if thingtalk_column is not None else None
+                raw_text, reverse_map = input_heuristics(raw_text, thingtalk)
                 reverse_maps.append(reverse_map)
             all_contexts.append(raw_text)
             raw_text += prompt_token
@@ -288,7 +291,16 @@ def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_colum
                     # logger.info("WARNING! You are not starting your generation from a control code so you won't get good results")
     return all_contexts, all_context_tokens, all_context_lengths, all_golds, reverse_maps
 
-def input_heuristics(s: str):
+
+def is_question(sentence: str):
+    question_words = ['which', 'what', 'where', 'how', 'who', 'when', 'is', 'are', 'am', \
+                      'can', 'could', 'would', 'will', 'have', 'did', 'do', 'does', 'no is', 'yes is']
+    for w in question_words:
+        if sentence.startswith(w+' '):
+            return True
+    return False
+
+def input_heuristics(s: str, thingtalk=None):
     """
     Changes the input string so that it is closer to what the pre-trained language models have seen during their training.
     Outputs:
@@ -297,14 +309,35 @@ def input_heuristics(s: str):
     """
     reverse_map = []
     s = s.strip()
-    s = detokenize(s)
 
     # Put question mark at the end whenever necessary.
-    if s.split()[0].lower() in ['which', 'what', 'where', 'how', 'who', 'when', 'is', 'are']:
-        if s.endswith('.'):
-            s = s[:-1]
-        if s[-1] != '?':
-            s += '?'
+    sentences = [sentence.strip() for sentence in re.split('\s+([.|?|!])\s*', s) if len(sentence) > 0]
+    # print('sentences = ', sentences)
+    for idx in range(len(sentences)):
+        if sentences[idx] in ['.', '?' , '!']:
+            continue
+        if idx == len(sentences)-1 or sentences[idx+1] not in ['.', '?', '!']:
+            # add the missing punctuation
+            if is_question(sentences[idx]):
+                sentences[idx] = sentences[idx] + '?'
+            else:
+                sentences[idx] = sentences[idx] + '.'
+        else:
+            if is_question(sentences[idx]):
+                assert sentences[idx+1] in ['.', '?', '!']
+                sentences[idx+1] = '?'
+        # capitalize the first word
+        if thingtalk:
+            _, parameters = remove_thingtalk_quotes(thingtalk)
+            # print('parameters = ', parameters)
+            for p in parameters:
+                capitalized_p = ' '.join([t[0].upper()+t[1:] for t in p.split()])
+                sentences[idx] = sentences[idx].replace(p, capitalized_p)
+        sentences[idx] = sentences[idx].replace(' i ', ' I ')
+        sentences[idx] = sentences[idx][0].upper()+sentences[idx][1:]
+    s = ' '.join(sentences)
+    s = detokenize(s)
+    # print('s = ', s)
 
     # replace special tokens with natural-looking exmaples
     reverse_map = []
@@ -370,6 +403,8 @@ def parse_argv(parser):
                         help='The column in the input file which contains the text we should start generation from.')
     parser.add_argument('--gold_column', type=int, default=None,
                         help='The column in the input file which contains the gold sentences. Defaults to --input_column if no gold is available.')
+    parser.add_argument('--thingtalk_column', type=int, default=None,
+                        help='The column in the input file which contains the ThingTalk program.')
     parser.add_argument("--output_file", type=str, help="When specified, generated text will be written in this file.")
     parser.add_argument("--xlm_lang", type=str, default="", help="Optional language when used with the XLM model.")
     parser.add_argument("--length", type=int, default=20, help='The generated sentences will have a maximum length of len(input) + arg.length')
@@ -500,6 +535,7 @@ def run_generation(args):
     all_contexts, all_context_tokens, all_context_lengths, all_golds, reverse_maps = \
                                   create_features_from_tsv_file(file_path=args.input_file, tokenizer=tokenizer,
                                   input_column=args.input_column, gold_column=args.gold_column, prompt_column=args.prompt_column,
+                                  thingtalk_column=args.thingtalk_column,
                                   prompt_token=args.prompt_token, skip_heuristics=args.skip_heuristics)
 
     
