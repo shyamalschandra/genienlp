@@ -255,7 +255,8 @@ special_pattern_mapping = [
     SpecialTokenMap('GENERIC_ENTITY_uk.ac.cam.multiwoz.Restaurant:Restaurant_([0-9]+)', lambda x: 'McDonald\'s', lambda x: ['McDonald\'s', 'Mc Donald\'s', 'McDonald', 'Mc Donald'])
 ]
 
-def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, thingtalk_column, prompt_token, skip_heuristics):
+def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_column, prompt_column, thingtalk_column, prompt_token,
+                                  skip_heuristics, is_cased):
     """
     Read a tsv file (this includes a text file with one example per line) and returns input features that the model needs
     """
@@ -277,12 +278,18 @@ def create_features_from_tsv_file(file_path, tokenizer, input_column, gold_colum
                 reverse_maps.append({})
             else:
                 thingtalk = row[thingtalk_column] if thingtalk_column is not None else None
-                raw_text, reverse_map = input_heuristics(raw_text, thingtalk)
+                raw_text, reverse_map = input_heuristics(raw_text, thingtalk, is_cased)
+                # print('raw_text = ', raw_text)
+                # print('reverse_map = ', reverse_map)
                 reverse_maps.append(reverse_map)
             all_contexts.append(raw_text)
             raw_text += prompt_token
             if prompt_column is not None and len(row) > prompt_column:
-                raw_text += row[prompt_column]
+                prompt = row[prompt_column]
+                if not skip_heuristics:
+                    prompt, _ = input_heuristics(prompt, thingtalk, is_cased)
+                    # print('prompt = ', prompt)
+                raw_text += prompt
             context_tokens = tokenizer.encode(raw_text, add_special_tokens=False)
             all_context_tokens.append(context_tokens)
             all_context_lengths.append(len(context_tokens))
@@ -300,7 +307,7 @@ def is_question(sentence: str):
             return True
     return False
 
-def input_heuristics(s: str, thingtalk=None):
+def input_heuristics(s: str, thingtalk=None, is_cased=False):
     """
     Changes the input string so that it is closer to what the pre-trained language models have seen during their training.
     Outputs:
@@ -326,18 +333,19 @@ def input_heuristics(s: str, thingtalk=None):
             if is_question(sentences[idx]):
                 assert sentences[idx+1] in ['.', '?', '!']
                 sentences[idx+1] = '?'
-        # capitalize the first word
-        if thingtalk:
-            _, parameters = remove_thingtalk_quotes(thingtalk)
-            # print('parameters = ', parameters)
-            for p in parameters:
-                capitalized_p = ' '.join([t[0].upper()+t[1:] for t in p.split()])
-                sentences[idx] = sentences[idx].replace(p, capitalized_p)
-        sentences[idx] = sentences[idx].replace(' i ', ' I ')
-        sentences[idx] = sentences[idx][0].upper()+sentences[idx][1:]
+
+        if is_cased:
+            # capitalize the first word and parameters
+            if thingtalk:
+                _, parameters = remove_thingtalk_quotes(thingtalk)
+                # print('parameters = ', parameters)
+                for p in parameters:
+                    capitalized_p = ' '.join([t[0].upper()+t[1:] for t in p.split()])
+                    sentences[idx] = sentences[idx].replace(p, capitalized_p)
+            sentences[idx] = sentences[idx].replace(' i ', ' I ')
+            sentences[idx] = sentences[idx][0].upper()+sentences[idx][1:]
     s = ' '.join(sentences)
     s = detokenize(s)
-    # print('s = ', s)
 
     # replace special tokens with natural-looking exmaples
     reverse_map = []
@@ -345,13 +353,16 @@ def input_heuristics(s: str, thingtalk=None):
         s, r = spm.forwad(s)
         reverse_map.extend(r)
 
+    # print('s = ', s)
     return s, reverse_map
 
-def output_heuristics(s: str, reverse_map: list):
+def output_heuristics(s: str, reverse_map: list, is_cased=False):
     for spm, occurance in reverse_map:
         s = spm.backward(s, occurance)
 
     s = tokenize(s)
+    if is_cased:
+        s = lower_case(s)
     return s
 
 
@@ -410,7 +421,8 @@ def parse_argv(parser):
     parser.add_argument("--length", type=int, default=20, help='The generated sentences will have a maximum length of len(input) + arg.length')
     parser.add_argument("--min_output_length", type=int, default=1, help='Will prevent stop tokens from appearing in the first --min_length tokens of the generated sentences.')
     parser.add_argument("--skip_heuristics", action='store_true', help='If True, will not replace special word such as NUMBER_0 in the input.')
-    parser.add_argument("--do_lower_case", action='store_true', help='If True, will convert the output to lowercase. Has no effect if the model is already uncased.')
+    parser.add_argument("--is_cased", action='store_true',
+                        help='If True, the trained model is cased, so if --skip_heuristics is not set, we will convert the input to upper case and the output back to lower case.')
     
     # These can be used for improving the quality of the output
     parser.add_argument("--num_samples", type=int, default=1)
@@ -435,7 +447,7 @@ def parse_argv(parser):
                         help="random seed for initialization")
     parser.add_argument('--prompt_token', type=str, default='<paraphrase>',
                         help="Token after which text generation starts. We add this to the end of all inputs.")
-    parser.add_argument('--stop_tokens', type=str, nargs='+', default=['</paraphrase>', '?'],
+    parser.add_argument('--stop_tokens', type=str, nargs='+', default=['</paraphrase>'],
                         help="Token at which text generation is stopped. The first element of the list is used as segment id as well.")
     parser.add_argument('--batch_size', type=int, default=4,
                         help="Batch size for text generation for each GPU.")
@@ -536,7 +548,7 @@ def run_generation(args):
                                   create_features_from_tsv_file(file_path=args.input_file, tokenizer=tokenizer,
                                   input_column=args.input_column, gold_column=args.gold_column, prompt_column=args.prompt_column,
                                   thingtalk_column=args.thingtalk_column,
-                                  prompt_token=args.prompt_token, skip_heuristics=args.skip_heuristics)
+                                  prompt_token=args.prompt_token, skip_heuristics=args.skip_heuristics, is_cased=args.is_cased)
 
     
     # sort contexts based on their length so that less generated tokens are thrown away and generation can be done faster
@@ -616,9 +628,7 @@ def run_generation(args):
                 text = re.sub('\s\s+', ' ', text) # remove duplicate white spaces
                 text = text.strip()
                 if not args.skip_heuristics:
-                    text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])])
-                if args.do_lower_case:
-                    text = lower_case(text)
+                    text = output_heuristics(text, batch_reverse_maps[i % (batch_slice[1]-batch_slice[0])], is_cased=args.is_cased)
                 batch_outputs[i % (batch_slice[1]-batch_slice[0])].append(text)
 
                 if args.selection_criterion == 'bleu':
