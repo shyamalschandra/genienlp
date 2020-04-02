@@ -106,12 +106,17 @@ def tokenizer(s):
     return s.split()
 
 def detokenize(text: str):
+    exceptions = [match.group(0) for match in re.finditer('[A-Za-z:_.]+_[0-9]+', text)]
+    for e in exceptions:
+        text = text.replace(e, '<temp>', 1)
     tokens = ["'d", "n't", "'ve", "'m", "'re", "'ll", ".", ",", "?", "!", "'s", ")"]
     for t in tokens:
         text = text.replace(' ' + t, t)
     text = text.replace("( ", "(")
     text = text.replace('gon na', 'gonna')
     text = text.replace('wan na', 'wanna')
+    for e in exceptions:
+        text = text.replace('<temp>', e, 1)
     return text
 
 def tokenize(text: str):
