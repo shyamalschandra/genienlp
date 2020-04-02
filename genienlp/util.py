@@ -92,7 +92,6 @@ class SpecialTokenMap:
             o = [' '+occurance+' ', occurance+' ', ' '+occurance]
             new_s = s
             for i in range(len(l)):
-                print(l[i]+'|'+o[i]+'|'+s)
                 new_s = re.sub(l[i], o[i], s, flags=re.IGNORECASE)
                 if s != new_s:
                     break
